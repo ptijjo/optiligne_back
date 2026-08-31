@@ -1,0 +1,49 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+tmp/
+
+# Tests / coverage / profilage
+*.test
+*.out
+*.coverprofile
+coverage.out
+coverage.html
+cpu.out
+mem.out
+
+# Secrets & env
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Cursor / IDE / OS
+.cursor/
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Debug (Delve / VS Code / Cursor)
+__debug_bin*
+debug

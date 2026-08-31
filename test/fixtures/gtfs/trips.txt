@@ -1,0 +1,4 @@
+route_id,service_id,trip_id,trip_headsign,trip_short_name,direction_id,block_id,shape_id,wheelchair_accessible,bikes_allowed
+R1,SVC1,T1,"Dest A",SAV34,0,,SH1,,
+R2,SVC1,T2,"Dest B",R004,0,,SH1,,
+R3,SVC1,T3,"Dest C",OTH,0,,SH1,,

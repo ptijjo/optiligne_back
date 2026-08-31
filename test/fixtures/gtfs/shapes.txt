@@ -1,0 +1,5 @@
+shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled
+SH1,49.0,6.0,0,0
+SH1,49.0,6.001,1,100
+SH1,49.0,6.002,2,200
+SH1,49.0,6.003,3,300

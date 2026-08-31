@@ -1,0 +1,4 @@
+stop_id,stop_code,stop_name,stop_desc,stop_lat,stop_lon,zone_id,stop_url,location_type,parent_station,stop_timezone,wheelchair_boarding
+S1,S1,"Arret A",,49.0,6.0,,,,,,
+S2,S2,"Arret B",,49.0,6.001,,,,,,
+S3,S3,"Arret C",,49.0,6.002,,,,,,
