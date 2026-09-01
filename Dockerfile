@@ -27,17 +27,20 @@ WORKDIR /app
 COPY --from=builder /out/api ./api
 COPY --chown=app:app GTFS ./GTFS
 COPY --chown=app:app data/perimetres ./data/perimetres
+COPY docker/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh
 
+# Coolify injecte parfois PORT : garder HTTP_PORT et PORT identiques (9191 ici).
 ENV APP_ENV=production \
-    HTTP_PORT=8080 \
+    PORT=9191 \
+    HTTP_PORT=9191 \
     GTFS_DATA_DIR=/app/GTFS \
     PERIMETRES_DIR=/app/data/perimetres
 
 EXPOSE 9191
 
-# Coolify injecte souvent PORT ; l'app lit HTTP_PORT puis PORT (défaut 8080).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
-    CMD wget --no-verbose --tries=1 --spider "http://127.0.0.1:${PORT:-${HTTP_PORT:-8080}}/health" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
+    CMD /usr/local/bin/healthcheck.sh
 
 USER app
 
