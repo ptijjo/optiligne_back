@@ -1,0 +1,33 @@
+# Git / IDE
+.git
+.gitignore
+.cursor
+.idea
+.vscode
+
+# Secrets (Coolify : variables d'environnement)
+.env
+.env.*
+!.env.example
+
+# Artefacts locaux
+*.exe
+*.test
+*.out
+bin/
+dist/
+tmp/
+logs/
+vendor/
+__debug_bin*
+debug
+
+# Tests & fixtures (pas nécessaires au build runtime)
+test/
+**/*_test.go
+match_*.json
+shape_sample.json
+
+# Docs / outils hors image API
+Dockerfile
+.dockerignore
