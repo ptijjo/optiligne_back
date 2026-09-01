@@ -30,12 +30,24 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
 
-	// 4. Fail fast si PostGIS est absent.
+	// 4. Activer PostGIS si l'image le fournit mais l'extension n'est pas encore créée dans cette base.
+	if err := ensurePostGISExtension(db); err != nil {
+		return nil, err
+	}
+
+	// 5. Fail fast si PostGIS est absent.
 	if err := requirePostGIS(db); err != nil {
 		return nil, err
 	}
 
 	return db, nil
+}
+
+func ensurePostGISExtension(db *gorm.DB) error {
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS postgis").Error; err != nil {
+		return fmt.Errorf("extension postgis: %w", err)
+	}
+	return nil
 }
 
 func requirePostGIS(db *gorm.DB) error {
