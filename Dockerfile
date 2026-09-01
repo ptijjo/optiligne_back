@@ -15,6 +15,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /out/api \
     ./cmd/api
 
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /out/importer \
+    ./cmd/importer
+
 # Image finale minimale
 FROM alpine:3.21
 
@@ -25,10 +30,12 @@ RUN apk add --no-cache ca-certificates wget \
 WORKDIR /app
 
 COPY --from=builder /out/api ./api
+COPY --from=builder /out/importer ./importer
 COPY --chown=app:app GTFS ./GTFS
 COPY --chown=app:app data/perimetres ./data/perimetres
 COPY docker/healthcheck.sh /usr/local/bin/healthcheck.sh
-RUN chmod +x /usr/local/bin/healthcheck.sh
+COPY docker/entrypoint.sh ./entrypoint.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh ./entrypoint.sh
 
 # Coolify injecte parfois PORT : garder HTTP_PORT et PORT identiques (9191 ici).
 ENV APP_ENV=production \
@@ -39,9 +46,10 @@ ENV APP_ENV=production \
 
 EXPOSE 9191
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+# Premier import GTFS (shapes) peut prendre plusieurs minutes.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
     CMD /usr/local/bin/healthcheck.sh
 
 USER app
 
-CMD ["./api"]
+CMD ["./entrypoint.sh"]
