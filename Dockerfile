@@ -47,7 +47,7 @@ ENV APP_ENV=production \
 EXPOSE 9191
 
 # Premier import GTFS (shapes) peut prendre plusieurs minutes.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=2 \
     CMD /usr/local/bin/healthcheck.sh
 
 USER app
