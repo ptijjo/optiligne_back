@@ -1,2 +1,2 @@
 ﻿feed_publisher_name,feed_start_date,feed_end_date,feed_version,feed_lang,feed_publisher_url
-Fluo 57 - Moselle,20260828,20270815,20260831,fr,http://fluo.grandest.fr
+Fluo 57 - Moselle,20260821,20270815,20260821,fr,http://fluo.grandest.fr
