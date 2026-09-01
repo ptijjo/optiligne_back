@@ -90,6 +90,47 @@ func (s *Service) PatchStop(ctx context.Context, operatorCode, depotCode, routeI
 	return s.store.LoadDraft(ctx, op, depot, routeID, "")
 }
 
+func allowedRouteType(routeType int) bool {
+	switch routeType {
+	case 204, 712, 713:
+		return true
+	default:
+		return false
+	}
+}
+
+// PatchRouteType change le type GTFS (PostGIS + routes.txt).
+func (s *Service) PatchRouteType(ctx context.Context, operatorCode, depotCode, routeID string, routeType int) (*dto.Draft, error) {
+	if !allowedRouteType(routeType) {
+		return nil, ErrInvalidRouteType
+	}
+	op, depot, err := s.resolve(operatorCode, depotCode)
+	if err != nil {
+		return nil, err
+	}
+	if routeID == "" {
+		return nil, catalog.ErrScopeRequired
+	}
+	draft, err := s.store.LoadDraft(ctx, op, depot, routeID, "")
+	if err != nil {
+		return nil, err
+	}
+	if s.guard != nil && s.guard.HasActiveTrip(draft.TripID) {
+		return nil, ErrTripActive
+	}
+	// 1. PostGIS.
+	if err := s.store.UpdateRouteType(ctx, draft.FeedID, routeID, routeType); err != nil {
+		return nil, err
+	}
+	// 2. Fichier GTFS.
+	if s.files != nil {
+		if err := s.files.PatchRouteType(routeID, routeType); err != nil {
+			return nil, err
+		}
+	}
+	return s.store.LoadDraft(ctx, op, depot, routeID, "")
+}
+
 // Recalculate demande OSRM (preview, pas d'écriture).
 func (s *Service) Recalculate(ctx context.Context, operatorCode, depotCode, routeID string, req dto.RecalcRequest) (*dto.RecalcResponse, error) {
 	op, depot, err := s.resolve(operatorCode, depotCode)

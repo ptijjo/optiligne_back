@@ -31,12 +31,20 @@ type Draft struct {
 	RouteID     string         `json:"routeId"`
 	ShortName   string         `json:"shortName"`
 	LongName    string         `json:"longName"`
+	RouteType   int            `json:"routeType"`
 	TripID      string         `json:"tripId"`
 	ShapeID     string         `json:"shapeId"`
 	FeedID      string         `json:"-"`
 	FeedVersion string         `json:"feedVersion"`
 	Shape       dto.LineString `json:"shape"`
 	Stops       []EditorStop   `json:"stops"`
+}
+
+// PatchRouteTypeRequest change le type GTFS d'une ligne.
+type PatchRouteTypeRequest struct {
+	RouteType    int    `json:"routeType"`
+	OperatorCode string `json:"operatorCode" binding:"required"`
+	DepotCode    string `json:"depotCode" binding:"required"`
 }
 
 // PatchStopRequest déplace un arrêt.

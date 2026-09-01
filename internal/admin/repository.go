@@ -16,6 +16,7 @@ type draftRow struct {
 	RouteID     string
 	ShortName   string
 	LongName    string
+	RouteType   int
 	TripID      string
 	ShapeID     string
 	FeedID      string
@@ -27,6 +28,7 @@ type Store interface {
 	LoadDraft(ctx context.Context, operatorCode, depotCode, routeID, tripID string) (*dto.Draft, error)
 	SearchStops(ctx context.Context, query string, limit int) ([]dto.StopHit, error)
 	UpdateStop(ctx context.Context, feedID, stopID string, lat, lng float64) error
+	UpdateRouteType(ctx context.Context, feedID, routeID string, routeType int) error
 	UpsertStop(ctx context.Context, feedID string, stop dto.EditorStop) error
 	UpdateShape(ctx context.Context, feedID, shapeID string, pts []gtfs.ShapePoint) error
 	ListSiblingShapeIDs(ctx context.Context, feedID, routeID, tripID string) ([]string, error)
@@ -49,7 +51,7 @@ func NewRepository(db *gorm.DB) *Repository {
 func (r *Repository) LoadDraft(ctx context.Context, operatorCode, depotCode, routeID, tripID string) (*dto.Draft, error) {
 	var row draftRow
 	err := r.db.WithContext(ctx).Raw(`
-		SELECT r.route_id, r.short_name, r.long_name, t.trip_id, t.shape_id,
+		SELECT r.route_id, r.short_name, r.long_name, r.route_type, t.trip_id, t.shape_id,
 		       fv.id AS feed_id, fv.feed_version
 		FROM routes r
 		JOIN route_assignments a ON a.route_id = r.route_id AND a.feed_version_id = r.feed_version_id
@@ -99,10 +101,24 @@ func (r *Repository) LoadDraft(ctx context.Context, operatorCode, depotCode, rou
 		})
 	}
 	return &dto.Draft{
-		RouteID: row.RouteID, ShortName: row.ShortName, LongName: row.LongName,
+		RouteID: row.RouteID, ShortName: row.ShortName, LongName: row.LongName, RouteType: row.RouteType,
 		TripID: row.TripID, ShapeID: row.ShapeID, FeedID: row.FeedID, FeedVersion: row.FeedVersion,
 		Shape: guidancedto.DecodeLineString(raw), Stops: outStops,
 	}, nil
+}
+
+func (r *Repository) UpdateRouteType(ctx context.Context, feedID, routeID string, routeType int) error {
+	res := r.db.WithContext(ctx).Exec(
+		`UPDATE routes SET route_type = ? WHERE feed_version_id = ? AND route_id = ?`,
+		routeType, feedID, routeID,
+	)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return catalog.ErrRouteNotFound
+	}
+	return nil
 }
 
 func (r *Repository) SearchStops(ctx context.Context, query string, limit int) ([]dto.StopHit, error) {

@@ -27,6 +27,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	g.GET("/stops", h.searchStops)
 	g.GET("/routes/:routeId", h.draft)
 	g.PATCH("/routes/:routeId/stops", h.patchStop)
+	g.PATCH("/routes/:routeId/type", h.patchRouteType)
 	g.POST("/routes/:routeId/recalculate", h.recalculate)
 	g.POST("/routes/:routeId/match", h.match)
 	g.POST("/routes/:routeId/save", h.save)
@@ -60,6 +61,20 @@ func (h *Handler) patchStop(c *gin.Context) {
 		return
 	}
 	out, err := h.svc.PatchStop(c.Request.Context(), req.OperatorCode, req.DepotCode, c.Param("routeId"), req.StopID, req.Lat, req.Lng)
+	if err != nil {
+		writeAdminErr(c, err)
+		return
+	}
+	response.OK(c, out)
+}
+
+func (h *Handler) patchRouteType(c *gin.Context) {
+	var req dto.PatchRouteTypeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid_route_type", "Type de ligne invalide.")
+		return
+	}
+	out, err := h.svc.PatchRouteType(c.Request.Context(), req.OperatorCode, req.DepotCode, c.Param("routeId"), req.RouteType)
 	if err != nil {
 		writeAdminErr(c, err)
 		return
@@ -130,6 +145,8 @@ func writeAdminErr(c *gin.Context, err error) {
 		response.Error(c, http.StatusBadRequest, "scope_required", "Transporteur et dépôt obligatoires.")
 	case errors.Is(err, catalog.ErrRouteNotFound), errors.Is(err, catalog.ErrTripNotFound):
 		response.Error(c, http.StatusNotFound, "route_not_found", "Ligne ou course introuvable.")
+	case errors.Is(err, ErrInvalidRouteType):
+		response.Error(c, http.StatusBadRequest, "invalid_route_type", "Type de ligne invalide.")
 	case errors.Is(err, ErrInvalidCoords), errors.Is(err, ErrShapeTooShort), errors.Is(err, ErrTooFewStops):
 		response.Error(c, http.StatusBadRequest, "invalid_coords", "Coordonnées ou séquence d’arrêts invalides.")
 	case errors.Is(err, ErrOSRM):

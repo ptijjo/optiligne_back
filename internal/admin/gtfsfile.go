@@ -15,6 +15,7 @@ import (
 // Files persiste les corrections dans le dossier GTFS/.
 type Files interface {
 	PatchStop(stopID string, lat, lng float64) error
+	PatchRouteType(routeID string, routeType int) error
 	UpsertStop(stopID, name string, lat, lng float64) error
 	ReplaceShape(shapeID string, pts []gtfs.ShapePoint) error
 	ReplaceShapes(shapeIDs []string, pts []gtfs.ShapePoint) error
@@ -47,6 +48,17 @@ func (f *GTFSFiles) PatchStop(stopID string, lat, lng float64) error {
 		out := append([]string(nil), row...)
 		setCol(header, out, "stop_lat", formatCoord(lat))
 		setCol(header, out, "stop_lon", formatCoord(lng))
+		return out
+	})
+}
+
+func (f *GTFSFiles) PatchRouteType(routeID string, routeType int) error {
+	return rewriteCSV(filepath.Join(f.Dir, "routes.txt"), func(header, row []string) []string {
+		if col(header, row, "route_id") != routeID {
+			return row
+		}
+		out := append([]string(nil), row...)
+		setCol(header, out, "route_type", strconv.Itoa(routeType))
 		return out
 	})
 }

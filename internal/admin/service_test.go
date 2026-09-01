@@ -23,6 +23,7 @@ type fakeStore struct {
 	replacedTimes   map[string][]dto.TimedStop
 	searchHits      []dto.StopHit
 	existingStopIDs map[string]bool
+	lastRouteType   int
 }
 
 func (f *fakeStore) LoadDraft(_ context.Context, _, _, _, tripID string) (*dto.Draft, error) {
@@ -60,6 +61,12 @@ func (f *fakeStore) UpdateStop(_ context.Context, _, stopID string, lat, lng flo
 			f.draft.Stops[i].Lng = lng
 		}
 	}
+	return nil
+}
+
+func (f *fakeStore) UpdateRouteType(_ context.Context, _, _ string, routeType int) error {
+	f.lastRouteType = routeType
+	f.draft.RouteType = routeType
 	return nil
 }
 
@@ -162,10 +169,16 @@ type fakeFiles struct {
 	shapes     int
 	upserts    int
 	stopTimes  int
+	routeTypes int
 }
 
 func (f *fakeFiles) PatchStop(string, float64, float64) error {
 	f.stops++
+	return nil
+}
+
+func (f *fakeFiles) PatchRouteType(string, int) error {
+	f.routeTypes++
 	return nil
 }
 
@@ -195,7 +208,7 @@ func (g fakeGuard) HasActiveTrip(tripID string) bool { return g.active == tripID
 
 func sampleDraft() *dto.Draft {
 	return &dto.Draft{
-		RouteID: "R1", ShortName: "57S012", TripID: "T1", ShapeID: "SH1",
+		RouteID: "R1", ShortName: "57S012", RouteType: 713, TripID: "T1", ShapeID: "SH1",
 		FeedID: "fv1", FeedVersion: "2026",
 		Shape: guidancedto.LineString{Type: "LineString", Coordinates: [][]float64{{6.9, 49.1}, {6.91, 49.12}}},
 		Stops: []dto.EditorStop{
@@ -254,6 +267,33 @@ func TestPatchStop_EcritFichier(t *testing.T) {
 	}
 	if out.Stops[0].Lat != 49.201 {
 		t.Fatalf("lat = %v", out.Stops[0].Lat)
+	}
+}
+
+func TestPatchRouteType_RefuseTypeInvalide(t *testing.T) {
+	svc := admin.NewService(&fakeStore{draft: sampleDraft()}, fakeRouter{}, &fakeFiles{}, nil, "")
+	_, err := svc.PatchRouteType(context.Background(), "transavold", "fluo57", "R1", 999)
+	if err != admin.ErrInvalidRouteType {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPatchRouteType_EcritFichier(t *testing.T) {
+	files := &fakeFiles{}
+	store := &fakeStore{draft: sampleDraft()}
+	svc := admin.NewService(store, fakeRouter{}, files, nil, "")
+	out, err := svc.PatchRouteType(context.Background(), "transavold", "fluo57", "R1", 712)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files.routeTypes != 1 {
+		t.Fatalf("routes.txt patches = %d", files.routeTypes)
+	}
+	if store.lastRouteType != 712 {
+		t.Fatalf("route_type = %d", store.lastRouteType)
+	}
+	if out.RouteType != 712 {
+		t.Fatalf("draft route_type = %d", out.RouteType)
 	}
 }
 

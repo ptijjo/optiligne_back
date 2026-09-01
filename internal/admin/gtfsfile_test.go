@@ -10,6 +10,29 @@ import (
 	"github.com/ptijjo/optiligne_back/internal/gtfs"
 )
 
+func TestGTFSFiles_PatchRouteType(t *testing.T) {
+	dir := t.TempDir()
+	body := "route_id,agency_id,route_short_name,route_long_name,route_desc,route_type\nR1,AG1,57SAV34,ADELANGE / ST-AVOLD,,713\nR2,AG1,57R004,CREUTZWALD / METZ,,204\n"
+	if err := os.WriteFile(filepath.Join(dir, "routes.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := admin.NewGTFSFiles(dir)
+	if err := files.PatchRouteType("R1", 712); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "routes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "R1") || !strings.Contains(s, ",712") {
+		t.Fatalf("routes.txt = %s", raw)
+	}
+	if !strings.Contains(s, "R2") || !strings.Contains(s, "204") {
+		t.Fatal("l'autre ligne a disparu")
+	}
+}
+
 func TestGTFSFiles_PatchStop(t *testing.T) {
 	dir := t.TempDir()
 	body := "stop_id,stop_name,stop_lat,stop_lon\nA,Depart,49.100000,6.900000\nB,Ecole,49.120000,6.910000\n"
