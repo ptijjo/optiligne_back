@@ -33,3 +33,19 @@ func TestHealth_RetourneOK(t *testing.T) {
 		t.Fatalf("status = %q, attendu ok", body.Data.Status)
 	}
 }
+
+func TestHealth_HEAD_RetourneOKSansCorps(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := newRouter(&App{})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodHead, "/health", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, attendu %d", w.Code, http.StatusOK)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("corps HEAD non vide: %q", w.Body.String())
+	}
+}

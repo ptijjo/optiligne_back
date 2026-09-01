@@ -14,11 +14,8 @@ func newRouter(a *App) *gin.Engine {
 		r.Use(cors(a.cfg.AdminCORSOrigins))
 	}
 
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"data": gin.H{"status": "ok"},
-		})
-	})
+	r.GET("/health", health)
+	r.HEAD("/health", health)
 
 	if a.auth != nil {
 		a.auth.RegisterRoutes(r)
