@@ -46,6 +46,13 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 	if err != nil {
 		return 0, err
 	}
+	if n := len(feed.Anomalies); n > 0 {
+		shown := n
+		if shown > 20 {
+			shown = 20
+		}
+		log.Printf("%d anomalie(s) GTFS (flag, pas de correction): %v", n, feed.Anomalies[:shown])
+	}
 	// 2. Charger le périmètre déclaré (échec si ligne inconnue).
 	perim, err := scope.Load(perimDir, feed.Routes)
 	if err != nil {
@@ -139,10 +146,7 @@ func persistFeed(tx *gorm.DB, feedID string, feed *gtfs.Feed) error {
 	if err := createBatches(tx, trips, 200); err != nil {
 		return err
 	}
-	stops := make([]models.Stop, 0, len(feed.Stops))
-	for _, s := range feed.Stops {
-		stops = append(stops, models.Stop{ID: id.New(), FeedVersionID: feedID, StopID: s.StopID, Name: s.Name, Lat: s.Lat, Lon: s.Lon})
-	}
+	stops := modelStops(feedID, feed.Stops)
 	if err := createBatches(tx, stops, 500); err != nil {
 		return err
 	}
@@ -170,6 +174,31 @@ func persistFeed(tx *gorm.DB, feedID string, feed *gtfs.Feed) error {
 		dates = append(dates, models.CalendarDate{ID: id.New(), FeedVersionID: feedID, ServiceID: d.ServiceID, Date: d.Date, ExceptionType: d.ExceptionType})
 	}
 	return createBatches(tx, dates, 500)
+}
+
+// modelStops mappe les arrêts GTFS vers les modèles, en ignorant stop_id vide
+// et en dédupliquant (ux_stop_feed) — flag au parse, défense ici.
+func modelStops(feedID string, in []gtfs.Stop) []models.Stop {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]models.Stop, 0, len(in))
+	for _, s := range in {
+		if s.StopID == "" {
+			continue
+		}
+		if _, ok := seen[s.StopID]; ok {
+			continue
+		}
+		seen[s.StopID] = struct{}{}
+		out = append(out, models.Stop{
+			ID:            id.New(),
+			FeedVersionID: feedID,
+			StopID:        s.StopID,
+			Name:          s.Name,
+			Lat:           s.Lat,
+			Lon:           s.Lon,
+		})
+	}
+	return out
 }
 
 func persistShapes(tx *gorm.DB, feedID, shapesPath string, wanted map[string]struct{}) error {

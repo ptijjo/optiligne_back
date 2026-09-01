@@ -43,6 +43,33 @@ func TestAssignedShapeIDs_UniquementRoutesAffectees(t *testing.T) {
 	}
 }
 
+func TestModelStops_SkipEmptyAndDups(t *testing.T) {
+	got := modelStops("feed-1", []gtfs.Stop{
+		{StopID: "A", Name: "Premier"},
+		{StopID: "", Name: "FORBACH - Foyer"},
+		{StopID: "", Name: "FORBACH - Usine"},
+		{StopID: "A", Name: "Doublon A"},
+		{StopID: "B", Name: "Second"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].StopID != "A" || got[0].Name != "Premier" {
+		t.Fatalf("premier = %+v", got[0])
+	}
+	if got[1].StopID != "B" || got[1].Name != "Second" {
+		t.Fatalf("second = %+v", got[1])
+	}
+	for _, s := range got {
+		if s.FeedVersionID != "feed-1" {
+			t.Fatalf("FeedVersionID = %q", s.FeedVersionID)
+		}
+		if s.ID == "" {
+			t.Fatal("id applicatif manquant")
+		}
+	}
+}
+
 func write(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {

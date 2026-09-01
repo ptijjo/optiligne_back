@@ -88,6 +88,52 @@ func TestFormatGTFSClock(t *testing.T) {
 	}
 }
 
+func TestParseDir_IgnoreStopIDVide(t *testing.T) {
+	src := fixtureDir(t)
+	dst := t.TempDir()
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(src, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Name() == "stops.txt" {
+			b = append(b, []byte(
+				",,\"FORBACH - Foyer\",,49.184798,6.86816,,,,,,\n"+
+					",,\"FORBACH - Usine\",,49.182858,6.87347,,,,,,\n"+
+					"S1,S1,\"Arret A bis\",,49.0,6.0,,,,,,\n",
+			)...)
+		}
+		if err := os.WriteFile(filepath.Join(dst, e.Name()), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	feed, err := gtfs.ParseDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed.Stops) != 3 {
+		t.Fatalf("Stops = %d, want 3 (S1/S2/S3, sans id vide ni doublon)", len(feed.Stops))
+	}
+	seen := map[string]int{}
+	for _, s := range feed.Stops {
+		if s.StopID == "" {
+			t.Fatal("stop_id vide ne doit pas être importé")
+		}
+		seen[s.StopID]++
+	}
+	if seen["S1"] != 1 || seen["S2"] != 1 || seen["S3"] != 1 {
+		t.Fatalf("stop_id inattendus: %+v", seen)
+	}
+	if len(feed.Anomalies) == 0 {
+		t.Fatal("attendu des anomalies flaggées (stop_id vide / doublon)")
+	}
+}
+
 func TestParseDir_RefuseDossierIncomplet(t *testing.T) {
 	_, err := gtfs.ParseDir(t.TempDir())
 	if err == nil {

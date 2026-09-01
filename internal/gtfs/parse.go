@@ -25,6 +25,7 @@ type Feed struct {
 	Calendars    []Calendar
 	CalendarDates []CalendarDate
 	ShapePoints  map[string][]ShapePoint
+	Anomalies    []string
 }
 
 type Agency struct {
@@ -330,12 +331,24 @@ func parseTrips(path string, feed *Feed) error {
 }
 
 func parseStops(path string, feed *Feed) error {
+	seen := make(map[string]struct{})
 	return eachRow(path, func(h, row []string) error {
+		stopID := col(h, row, "stop_id")
+		name := col(h, row, "stop_name")
+		if stopID == "" {
+			feed.Anomalies = append(feed.Anomalies, fmt.Sprintf("stop sans stop_id: %s", name))
+			return nil
+		}
+		if _, ok := seen[stopID]; ok {
+			feed.Anomalies = append(feed.Anomalies, fmt.Sprintf("stop_id dupliqué: %s", stopID))
+			return nil
+		}
+		seen[stopID] = struct{}{}
 		lat, _ := strconv.ParseFloat(col(h, row, "stop_lat"), 64)
 		lon, _ := strconv.ParseFloat(col(h, row, "stop_lon"), 64)
 		feed.Stops = append(feed.Stops, Stop{
-			StopID: col(h, row, "stop_id"),
-			Name:   col(h, row, "stop_name"),
+			StopID: stopID,
+			Name:   name,
 			Lat:    lat,
 			Lon:    lon,
 		})
