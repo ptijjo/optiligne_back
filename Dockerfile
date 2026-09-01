@@ -33,7 +33,7 @@ ENV APP_ENV=production \
     GTFS_DATA_DIR=/app/GTFS \
     PERIMETRES_DIR=/app/data/perimetres
 
-EXPOSE 8080
+EXPOSE 9191
 
 # Coolify injecte souvent PORT ; l'app lit HTTP_PORT puis PORT (défaut 8080).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
