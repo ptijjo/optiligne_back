@@ -46,8 +46,9 @@ ENV APP_ENV=production \
 
 EXPOSE 9191
 
-# Premier import GTFS (shapes) peut prendre plusieurs minutes.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=2 \
+# L’entrypoint lance l’import GTFS avant l’API. Premier import (shapes) :
+# plusieurs minutes. Coolify rollback si unhealthy pendant ce délai.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=900s --retries=3 \
     CMD /usr/local/bin/healthcheck.sh
 
 USER app
