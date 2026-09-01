@@ -48,7 +48,7 @@ EXPOSE 9191
 
 # L’entrypoint lance l’import GTFS avant l’API. Premier import (shapes) :
 # plusieurs minutes. Coolify rollback si unhealthy pendant ce délai.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=900s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=2 \
     CMD /usr/local/bin/healthcheck.sh
 
 USER app
