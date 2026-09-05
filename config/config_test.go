@@ -131,3 +131,31 @@ func TestLoadFromEnv_AdminPrimeSurSeeder(t *testing.T) {
 		t.Fatalf("ADMIN_* doit primer: %+v", cfg)
 	}
 }
+
+func TestLoadFromEnv_LitCORSOrigins(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://u:p@localhost:5437/optiligne")
+	t.Setenv("CORS_ORIGINS", "https://admin.example.com,http://localhost:3000")
+	t.Setenv("ADMIN_CORS_ORIGINS", "http://localhost:9999")
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.CORSOrigins != "https://admin.example.com,http://localhost:3000" {
+		t.Fatalf("CORSOrigins = %q", cfg.CORSOrigins)
+	}
+}
+
+func TestLoadFromEnv_CORSOriginsFallbackAdmin(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://u:p@localhost:5437/optiligne")
+	t.Setenv("CORS_ORIGINS", "")
+	t.Setenv("ADMIN_CORS_ORIGINS", "http://localhost:5173")
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.CORSOrigins != "http://localhost:5173" {
+		t.Fatalf("CORSOrigins = %q", cfg.CORSOrigins)
+	}
+}

@@ -136,14 +136,17 @@ func (s *Service) loadShape(ctx context.Context, feedVersionID, shapeID string) 
 
 func (s *Service) loadStopPoints(ctx context.Context, feedVersionID, tripID string) []dto.StopPoint {
 	type row struct {
-		Name string
-		Lon  float64
-		Lat  float64
+		Name       string
+		Lon        float64
+		Lat        float64
+		ArrivalSec int
+		Sequence   int
 	}
 	var rows []row
 	// 1. Préférer stop_fracs (même ordre que le guidage).
 	_ = s.db.WithContext(ctx).Raw(`
-		SELECT COALESCE(NULLIF(sf.stop_name, ''), s.name) AS name, s.lon, s.lat
+		SELECT COALESCE(NULLIF(sf.stop_name, ''), s.name) AS name, s.lon, s.lat,
+			sf.arrival_sec AS arrival_sec, sf.stop_sequence AS sequence
 		FROM stop_fracs sf
 		JOIN stops s ON s.stop_id = sf.stop_id AND s.feed_version_id = sf.feed_version_id
 		WHERE sf.feed_version_id = ? AND sf.trip_id = ?
@@ -152,7 +155,8 @@ func (s *Service) loadStopPoints(ctx context.Context, feedVersionID, tripID stri
 	if len(rows) == 0 {
 		// 2. Fallback stop_times si les fractions manquent.
 		_ = s.db.WithContext(ctx).Raw(`
-			SELECT s.name, s.lon, s.lat
+			SELECT s.name, s.lon, s.lat,
+				st.arrival_sec AS arrival_sec, st.stop_sequence AS sequence
 			FROM stop_times st
 			JOIN stops s ON s.stop_id = st.stop_id AND s.feed_version_id = st.feed_version_id
 			WHERE st.feed_version_id = ? AND st.trip_id = ?
@@ -164,7 +168,10 @@ func (s *Service) loadStopPoints(ctx context.Context, feedVersionID, tripID stri
 		if r.Lat == 0 && r.Lon == 0 {
 			continue
 		}
-		out = append(out, dto.StopPoint{Name: r.Name, Lon: r.Lon, Lat: r.Lat})
+		out = append(out, dto.StopPoint{
+			Name: r.Name, Lon: r.Lon, Lat: r.Lat,
+			ArrivalSec: r.ArrivalSec, Sequence: r.Sequence,
+		})
 	}
 	return out
 }

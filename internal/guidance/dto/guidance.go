@@ -27,9 +27,11 @@ type LineString struct {
 
 // StopPoint est un arrêt à afficher sur la carte.
 type StopPoint struct {
-	Name string  `json:"name"`
-	Lon  float64 `json:"lon"`
-	Lat  float64 `json:"lat"`
+	Name       string  `json:"name"`
+	Lon        float64 `json:"lon"`
+	Lat        float64 `json:"lat"`
+	ArrivalSec int     `json:"arrivalSec"`
+	Sequence   int     `json:"sequence"`
 }
 
 // StartResponse identifie la session et fournit le fond de carte.

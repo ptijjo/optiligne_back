@@ -42,6 +42,9 @@ func NewGTFSFiles(dir string) *GTFSFiles {
 
 func (f *GTFSFiles) PatchStop(stopID string, lat, lng float64) error {
 	return rewriteCSV(filepath.Join(f.Dir, "stops.txt"), func(header, row []string) []string {
+		if col(header, row, "stop_id") == "" {
+			return nil
+		}
 		if col(header, row, "stop_id") != stopID {
 			return row
 		}
@@ -65,6 +68,10 @@ func (f *GTFSFiles) PatchRouteType(routeID string, routeType int) error {
 
 // UpsertStop met à jour ou ajoute une ligne dans stops.txt.
 func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
+	stopID = strings.TrimSpace(stopID)
+	if stopID == "" {
+		return ErrInvalidCoords
+	}
 	path := filepath.Join(f.Dir, "stops.txt")
 	in, err := os.Open(path)
 	if err != nil {
@@ -78,6 +85,7 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 	if err != nil {
 		return err
 	}
+	header = normalizeHeader(header)
 	tmp, err := os.CreateTemp(filepath.Dir(path), "stops-*.txt")
 	if err != nil {
 		return err
@@ -99,17 +107,19 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 			os.Remove(tmp.Name())
 			return err
 		}
-		if col(header, row, "stop_id") == stopID {
+		existingID := col(header, row, "stop_id")
+		if existingID == "" {
+			continue
+		}
+		if existingID == stopID {
 			found = true
 			out := make([]string, len(header))
 			copy(out, row)
-			if len(out) < len(header) {
-				out = make([]string, len(header))
+			if err := fillStopRow(header, out, stopID, name, lat, lng); err != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				return err
 			}
-			setCol(header, out, "stop_id", stopID)
-			setCol(header, out, "stop_name", name)
-			setCol(header, out, "stop_lat", formatCoord(lat))
-			setCol(header, out, "stop_lon", formatCoord(lng))
 			if err := w.Write(out); err != nil {
 				tmp.Close()
 				os.Remove(tmp.Name())
@@ -125,10 +135,11 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 	}
 	if !found {
 		nr := make([]string, len(header))
-		setCol(header, nr, "stop_id", stopID)
-		setCol(header, nr, "stop_name", name)
-		setCol(header, nr, "stop_lat", formatCoord(lat))
-		setCol(header, nr, "stop_lon", formatCoord(lng))
+		if err := fillStopRow(header, nr, stopID, name, lat, lng); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return err
+		}
 		if err := w.Write(nr); err != nil {
 			tmp.Close()
 			os.Remove(tmp.Name())
@@ -182,6 +193,7 @@ func (f *GTFSFiles) ReplaceShapes(shapeIDs []string, pts []gtfs.ShapePoint) erro
 	if err != nil {
 		return err
 	}
+	header = normalizeHeader(header)
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), "shapes-*.txt")
 	if err != nil {
@@ -278,6 +290,7 @@ func (f *GTFSFiles) ReplaceStopTimes(tripIDs []string, rows []StopTimeFileRow) e
 	if err != nil {
 		return err
 	}
+	header = normalizeHeader(header)
 	tmp, err := os.CreateTemp(filepath.Dir(path), "stop_times-*.txt")
 	if err != nil {
 		return err
@@ -343,6 +356,9 @@ func (f *GTFSFiles) ReplaceStopTimes(tripIDs []string, rows []StopTimeFileRow) e
 
 func writeStopTimeRows(w *csv.Writer, header []string, rows []StopTimeFileRow) error {
 	for _, st := range rows {
+		if strings.TrimSpace(st.StopID) == "" {
+			continue
+		}
 		nr := make([]string, len(header))
 		setCol(header, nr, "trip_id", st.TripID)
 		setCol(header, nr, "arrival_time", formatGTFSTimeHMS(st.ArrivalSec))
@@ -393,6 +409,7 @@ func rewriteCSV(path string, fn func(header, row []string) []string) error {
 	if err != nil {
 		return err
 	}
+	header = normalizeHeader(header)
 	tmp, err := os.CreateTemp(filepath.Dir(path), "gtfs-*.txt")
 	if err != nil {
 		return err
@@ -413,7 +430,11 @@ func rewriteCSV(path string, fn func(header, row []string) []string) error {
 			os.Remove(tmp.Name())
 			return err
 		}
-		if err := w.Write(fn(header, row)); err != nil {
+		out := fn(header, row)
+		if out == nil {
+			continue
+		}
+		if err := w.Write(out); err != nil {
 			tmp.Close()
 			os.Remove(tmp.Name())
 			return err
@@ -442,13 +463,36 @@ func col(header, row []string, name string) string {
 	return ""
 }
 
-func setCol(header, row []string, name, val string) {
+func setCol(header, row []string, name, val string) bool {
 	for i, h := range header {
 		if strings.TrimSpace(h) == name && i < len(row) {
 			row[i] = val
-			return
+			return true
 		}
 	}
+	return false
+}
+
+func fillStopRow(header, row []string, stopID, name string, lat, lng float64) error {
+	if !setCol(header, row, "stop_id", stopID) {
+		return fmt.Errorf("colonne stop_id absente de stops.txt")
+	}
+	setCol(header, row, "stop_name", name)
+	setCol(header, row, "stop_lat", formatCoord(lat))
+	setCol(header, row, "stop_lon", formatCoord(lng))
+	return nil
+}
+
+func normalizeHeader(header []string) []string {
+	out := make([]string, len(header))
+	for i, h := range header {
+		h = strings.TrimSpace(h)
+		if i == 0 {
+			h = strings.TrimPrefix(h, "\ufeff")
+		}
+		out[i] = h
+	}
+	return out
 }
 
 func formatCoord(v float64) string {

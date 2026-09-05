@@ -23,6 +23,7 @@ type Config struct {
 	ScopeOperatorID   string
 	JWTAccessSecret   string
 	JWTRefreshSecret  string
+	CORSOrigins       string
 	AdminCORSOrigins  string
 	AdminEmail        string
 	AdminPassword     string
@@ -75,6 +76,8 @@ func LoadFromEnv() (*Config, error) {
 		offRoute = v
 	}
 
+	corsOrigins := firstNonEmpty(os.Getenv("CORS_ORIGINS"), os.Getenv("ADMIN_CORS_ORIGINS"), "http://localhost:3000")
+
 	cfg := &Config{
 		AppEnv:            firstNonEmpty(os.Getenv("APP_ENV"), "development"),
 		Port:              firstNonEmpty(os.Getenv("HTTP_PORT"), os.Getenv("PORT"), "8080"),
@@ -86,7 +89,8 @@ func LoadFromEnv() (*Config, error) {
 		ScopeOperatorID:   os.Getenv("SCOPE_OPERATOR_ID"),
 		JWTAccessSecret:   os.Getenv("JWT_ACCESS_SECRET"),
 		JWTRefreshSecret:  os.Getenv("JWT_REFRESH_SECRET"),
-		AdminCORSOrigins:  firstNonEmpty(os.Getenv("ADMIN_CORS_ORIGINS"), "http://localhost:3000"),
+		CORSOrigins:       corsOrigins,
+		AdminCORSOrigins:  corsOrigins,
 		AdminEmail:        firstNonEmpty(os.Getenv("ADMIN_EMAIL"), os.Getenv("SEEDER_EMAIL")),
 		AdminPassword:     firstNonEmpty(os.Getenv("ADMIN_PASSWORD"), os.Getenv("SEEDER_PASSWORD")),
 		AdminOperatorCode: firstNonEmpty(os.Getenv("ADMIN_OPERATOR_CODE"), os.Getenv("SEEDER_OPERATOR_CODE"), os.Getenv("SCOPE_OPERATOR_ID")),

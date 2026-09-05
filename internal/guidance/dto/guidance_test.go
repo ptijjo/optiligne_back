@@ -1,6 +1,8 @@
 package dto_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ptijjo/optiligne_back/internal/guidance/dto"
@@ -22,5 +24,20 @@ func TestDecodeLineString_RefuseInvalide(t *testing.T) {
 	}
 	if len(dto.DecodeLineString(`{"type":"Point"}`).Coordinates) != 0 {
 		t.Fatal("point")
+	}
+}
+
+func TestStopPoint_JSONInclutHoraire(t *testing.T) {
+	raw, err := json.Marshal(dto.StopPoint{
+		Name: "Forbach", Lon: 6.9, Lat: 49.1, ArrivalSec: 26100, Sequence: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{`"arrivalSec":26100`, `"sequence":2`, `"name":"Forbach"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("json=%s manque %s", s, want)
+		}
 	}
 }

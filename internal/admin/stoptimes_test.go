@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ptijjo/optiligne_back/internal/admin/dto"
@@ -51,5 +52,22 @@ func TestNormalizeStops_RefuseMoinsDeDeux(t *testing.T) {
 	})
 	if err != ErrTooFewStops {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNormalizeStops_AssigneIDSiVide(t *testing.T) {
+	got, err := normalizeStops([]dto.EditorStop{
+		{StopID: "A", Name: "Depart", Sequence: 1, Lat: 49.1, Lng: 6.9},
+		{StopID: "", Name: "Nouveau", Sequence: 2, Lat: 49.11, Lng: 6.91},
+		{StopID: "B", Name: "Ecole", Sequence: 3, Lat: 49.12, Lng: 6.92},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[1].StopID == "" || !strings.HasPrefix(got[1].StopID, "ol-") {
+		t.Fatalf("stop_id généré = %q", got[1].StopID)
+	}
+	if got[0].StopID != "A" || got[2].StopID != "B" {
+		t.Fatalf("%+v", got)
 	}
 }

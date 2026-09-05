@@ -11,7 +11,7 @@ func newRouter(a *App) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger())
 	if a.cfg != nil {
-		r.Use(cors(a.cfg.AdminCORSOrigins))
+		r.Use(cors(a.cfg.CORSOrigins))
 	}
 
 	r.GET("/health", health)
@@ -35,18 +35,27 @@ func newRouter(a *App) *gin.Engine {
 
 func cors(originsCSV string) gin.HandlerFunc {
 	allowed := map[string]struct{}{}
+	allowAll := false
 	for _, o := range strings.Split(originsCSV, ",") {
-		o = strings.TrimSpace(o)
-		if o != "" {
-			allowed[o] = struct{}{}
+		o = strings.TrimSpace(strings.Trim(o, `"'`))
+		if o == "" {
+			continue
 		}
+		if o == "*" {
+			allowAll = true
+			continue
+		}
+		allowed[o] = struct{}{}
 	}
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		if _, ok := allowed[origin]; ok {
+		ok := origin != "" && (allowAll || mapHas(allowed, origin))
+		if ok {
 			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
+			c.Header("Access-Control-Max-Age", "86400")
 			c.Header("Vary", "Origin")
 		}
 		if c.Request.Method == http.MethodOptions {
@@ -55,4 +64,9 @@ func cors(originsCSV string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func mapHas(m map[string]struct{}, k string) bool {
+	_, ok := m[k]
+	return ok
 }

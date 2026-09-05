@@ -120,6 +120,62 @@ func TestGTFSFiles_UpsertStop_Ajoute(t *testing.T) {
 	}
 }
 
+func TestGTFSFiles_UpsertStop_RefuseIDVide(t *testing.T) {
+	dir := t.TempDir()
+	body := "stop_id,stop_name,stop_lat,stop_lon\nA,Depart,49.100000,6.900000\n"
+	if err := os.WriteFile(filepath.Join(dir, "stops.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := admin.NewGTFSFiles(dir)
+	if err := files.UpsertStop("", "FORBACH - Foyer", 49.18, 6.86); err == nil {
+		t.Fatal("attendu une erreur si stop_id vide")
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "stops.txt"))
+	if strings.Contains(string(raw), "FORBACH") {
+		t.Fatalf("ligne sans id écrite: %s", raw)
+	}
+}
+
+func TestGTFSFiles_UpsertStop_BOM_EcritStopID(t *testing.T) {
+	dir := t.TempDir()
+	body := "\ufeffstop_id,stop_code,stop_name,stop_desc,stop_lat,stop_lon\n266,266,Gare,,48.64,6.80\n"
+	if err := os.WriteFile(filepath.Join(dir, "stops.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := admin.NewGTFSFiles(dir)
+	if err := files.UpsertStop("ol-x", "Nouveau", 49.2, 6.92); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "stops.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "ol-x") {
+		t.Fatalf("stop_id perdu (BOM ?): %s", s)
+	}
+}
+
+func TestGTFSFiles_UpsertStop_NettoieLignesSansID(t *testing.T) {
+	dir := t.TempDir()
+	body := "stop_id,stop_name,stop_lat,stop_lon\nA,Depart,49.100000,6.900000\n,,FORBACH - Foyer,49.184798,6.868160\n"
+	if err := os.WriteFile(filepath.Join(dir, "stops.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := admin.NewGTFSFiles(dir)
+	if err := files.UpsertStop("ol-x", "Nouveau", 49.2, 6.92); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "stops.txt"))
+	s := string(raw)
+	if strings.Contains(s, "FORBACH") {
+		t.Fatalf("ligne sans stop_id conservée: %s", s)
+	}
+	if !strings.Contains(s, "ol-x") || !strings.Contains(s, "Depart") {
+		t.Fatalf("%s", s)
+	}
+}
+
 func TestGTFSFiles_ReplaceStopTimes_UneSeulePasse(t *testing.T) {
 	dir := t.TempDir()
 	body := "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,07:00:00,07:00:00,A,1\nT1,07:10:00,07:10:00,B,2\nT2,08:00:00,08:00:00,A,1\n"

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/ptijjo/optiligne_back/internal/admin/dto"
+	"github.com/ptijjo/optiligne_back/pkg/id"
 )
 
 // interpolateStopTimes aligne la nouvelle séquence sur les horaires connus (interpolation linéaire).
@@ -65,16 +66,20 @@ func normalizeStops(stops []dto.EditorStop) ([]dto.EditorStop, error) {
 	seen := make(map[string]struct{}, len(stops))
 	for i, st := range stops {
 		name := strings.TrimSpace(st.Name)
-		id := strings.TrimSpace(st.StopID)
-		if id == "" || name == "" || !validCoords(st.Lat, st.Lng) {
+		stopID := strings.TrimSpace(st.StopID)
+		if name == "" || !validCoords(st.Lat, st.Lng) {
 			return nil, ErrInvalidCoords
 		}
-		if _, dup := seen[id]; dup {
+		// Arrêt créé dans l'éditeur sans id : CUID, jamais une ligne GTFS vide.
+		if stopID == "" {
+			stopID = "ol-" + id.New()
+		}
+		if _, dup := seen[stopID]; dup {
 			continue
 		}
-		seen[id] = struct{}{}
+		seen[stopID] = struct{}{}
 		out = append(out, dto.EditorStop{
-			StopID: id, Name: name, Sequence: i + 1, Lat: st.Lat, Lng: st.Lng,
+			StopID: stopID, Name: name, Sequence: i + 1, Lat: st.Lat, Lng: st.Lng,
 		})
 	}
 	if len(out) < 2 {
