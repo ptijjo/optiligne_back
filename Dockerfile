@@ -32,17 +32,15 @@ WORKDIR /app
 COPY --from=builder /out/api ./api
 COPY --from=builder /out/importer ./importer
 COPY --chown=app:app data/perimetres ./data/perimetres
-# Feed GTFS : volume Coolify (GTFS_DATA_DIR), pas Git.
-RUN mkdir -p /app/GTFS && chown app:app /app/GTFS
 COPY docker/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh ./entrypoint.sh
 
 # Coolify injecte parfois PORT : garder HTTP_PORT et PORT identiques (9191 ici).
+# GTFS_DATA_DIR : volume persisté (pas dans l'image / pas dans Git).
 ENV APP_ENV=production \
     PORT=9191 \
     HTTP_PORT=9191 \
-    GTFS_DATA_DIR=/app/GTFS \
     PERIMETRES_DIR=/app/data/perimetres
 
 EXPOSE 9191

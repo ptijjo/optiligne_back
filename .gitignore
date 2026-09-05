@@ -48,5 +48,5 @@ go.work.sum
 __debug_bin*
 debug
 
-# Feed réel (local / volume prod). Les fixtures restent dans test/fixtures/gtfs/.
+# Feed réel (local / volume prod) — jamais dans Git. Fixtures : test/fixtures/gtfs/
 /GTFS/
