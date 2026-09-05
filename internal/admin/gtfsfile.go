@@ -205,7 +205,7 @@ func upsertCSVRow(path, idCol, idVal string, apply func(header, row []string)) e
 		return err
 	}
 	_ = in.Close()
-	return os.Rename(tmp.Name(), path)
+	return replaceFile(tmp.Name(), path)
 }
 
 // UpsertStop met à jour ou ajoute une ligne dans stops.txt.
@@ -299,7 +299,7 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 		return err
 	}
 	_ = in.Close()
-	return os.Rename(tmp.Name(), path)
+	return replaceFile(tmp.Name(), path)
 }
 
 func (f *GTFSFiles) ReplaceShape(shapeID string, pts []gtfs.ShapePoint) error {
@@ -397,7 +397,7 @@ func (f *GTFSFiles) ReplaceShapes(shapeIDs []string, pts []gtfs.ShapePoint) erro
 		return err
 	}
 	_ = in.Close()
-	return os.Rename(tmp.Name(), path)
+	return replaceFile(tmp.Name(), path)
 }
 
 // ReplaceStopTimes réécrit stop_times.txt en une passe : remplace les lignes des trip_id listés.
@@ -493,7 +493,7 @@ func (f *GTFSFiles) ReplaceStopTimes(tripIDs []string, rows []StopTimeFileRow) e
 		return err
 	}
 	_ = in.Close()
-	return os.Rename(tmp.Name(), path)
+	return replaceFile(tmp.Name(), path)
 }
 
 func writeStopTimeRows(w *csv.Writer, header []string, rows []StopTimeFileRow) error {
@@ -593,7 +593,32 @@ func rewriteCSV(path string, fn func(header, row []string) []string) error {
 		return err
 	}
 	_ = in.Close()
-	return os.Rename(tmp.Name(), path)
+	return replaceFile(tmp.Name(), path)
+}
+
+func replaceFile(tmpPath, dest string) error {
+	if err := os.Rename(tmpPath, dest); err == nil {
+		return nil
+	}
+	// Fallback (ex. volumes Docker / EXDEV) : copie puis suppression.
+	in, err := os.Open(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	_ = os.Remove(tmpPath)
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func col(header, row []string, name string) string {

@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -204,6 +205,8 @@ type fakeFiles struct {
 	routes     int
 	trips      int
 	calendars  int
+	routeErr   error
+	shapesErr  error
 }
 
 func (f *fakeFiles) PatchStop(string, float64, float64) error {
@@ -222,6 +225,9 @@ func (f *fakeFiles) UpsertStop(string, string, float64, float64) error {
 }
 
 func (f *fakeFiles) UpsertRoute(string, string, string, string, int) error {
+	if f.routeErr != nil {
+		return f.routeErr
+	}
 	f.routes++
 	return nil
 }
@@ -242,6 +248,9 @@ func (f *fakeFiles) ReplaceShape(string, []gtfs.ShapePoint) error {
 }
 
 func (f *fakeFiles) ReplaceShapes([]string, []gtfs.ShapePoint) error {
+	if f.shapesErr != nil {
+		return f.shapesErr
+	}
 	f.shapes++
 	return nil
 }
@@ -335,14 +344,27 @@ func TestPatchRouteType_EcritFichier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if files.routeTypes != 1 {
-		t.Fatalf("routes.txt patches = %d", files.routeTypes)
+	if files.routes != 1 {
+		t.Fatalf("routes.txt upserts = %d", files.routes)
 	}
 	if store.lastRouteType != 712 {
 		t.Fatalf("route_type = %d", store.lastRouteType)
 	}
 	if out.RouteType != 712 {
 		t.Fatalf("draft route_type = %d", out.RouteType)
+	}
+}
+
+func TestPatchRouteType_FichierKOApresPostGIS(t *testing.T) {
+	files := &fakeFiles{routeErr: errors.New("permission denied")}
+	store := &fakeStore{draft: sampleDraft()}
+	svc := admin.NewService(store, fakeRouter{}, files, nil, "")
+	_, err := svc.PatchRouteType(context.Background(), "transavold", "fluo57", "R1", 712)
+	if !errors.Is(err, admin.ErrGTFSFiles) {
+		t.Fatalf("err = %v", err)
+	}
+	if store.lastRouteType != 712 {
+		t.Fatalf("PostGIS aurait dû être mis à jour, got %d", store.lastRouteType)
 	}
 }
 
@@ -497,6 +519,23 @@ func TestSave_EcritShapeEtStops(t *testing.T) {
 	}
 	if out.FeedVersion != "2026" || out.Message == "" {
 		t.Fatalf("%+v", out)
+	}
+}
+
+func TestSave_FichierShapesKOApresPostGIS(t *testing.T) {
+	files := &fakeFiles{shapesErr: errors.New("no space left on device")}
+	store := &fakeStore{draft: sampleDraft()}
+	svc := admin.NewService(store, fakeRouter{}, files, nil, "")
+	_, err := svc.Save(context.Background(), "transavold", "fluo57", "R1", dto.SaveRequest{
+		OperatorCode: "transavold", DepotCode: "fluo57", TripID: "T1",
+		Stops: sampleDraft().Stops,
+		Shape: guidancedto.LineString{Type: "LineString", Coordinates: [][]float64{{6.9, 49.1}, {6.92, 49.13}}},
+	})
+	if !errors.Is(err, admin.ErrGTFSFiles) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(store.updatedShapes) == 0 {
+		t.Fatal("PostGIS shape aurait dû être mis à jour avant l’échec fichier")
 	}
 }
 

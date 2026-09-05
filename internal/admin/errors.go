@@ -11,4 +11,5 @@ var (
 	ErrTooFewStops      = errors.New("too_few_stops")
 	ErrInvalidCalendar  = errors.New("invalid_calendar")
 	ErrInvalidSchedule  = errors.New("invalid_schedule")
+	ErrGTFSFiles        = errors.New("gtfs_file_failed")
 )

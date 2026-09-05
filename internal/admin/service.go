@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -82,7 +83,7 @@ func (s *Service) PatchStop(ctx context.Context, operatorCode, depotCode, routeI
 	// 2. Fichier GTFS.
 	if s.files != nil {
 		if err := s.files.PatchStop(stopID, lat, lng); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 	}
 	if err := s.store.RecomputeFracs(ctx, draft.FeedID, []string{draft.ShapeID}); err != nil {
@@ -123,10 +124,10 @@ func (s *Service) PatchRouteType(ctx context.Context, operatorCode, depotCode, r
 	if err := s.store.UpdateRouteType(ctx, draft.FeedID, routeID, routeType); err != nil {
 		return nil, err
 	}
-	// 2. Fichier GTFS.
+	// 2. Fichier GTFS (upsert : crée la ligne dans routes.txt si absente).
 	if s.files != nil {
-		if err := s.files.PatchRouteType(routeID, routeType); err != nil {
-			return nil, err
+		if err := s.files.UpsertRoute(routeID, "", draft.ShortName, draft.LongName, routeType); err != nil {
+			return nil, wrapGTFS(err)
 		}
 	}
 	return s.store.LoadDraft(ctx, op, depot, routeID, "")
@@ -236,7 +237,7 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 		}
 		if s.files != nil {
 			if err := s.files.UpsertStop(st.StopID, st.Name, st.Lat, st.Lng); err != nil {
-				return nil, err
+				return nil, wrapGTFS(err)
 			}
 		}
 	}
@@ -261,7 +262,7 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 	}
 	if s.files != nil && len(fileRows) > 0 {
 		if err := s.files.ReplaceStopTimes(tripIDs, fileRows); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 	}
 
@@ -274,7 +275,7 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 	}
 	if s.files != nil && len(shapeIDs) > 0 {
 		if err := s.files.ReplaceShapes(shapeIDs, pts); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 	}
 
@@ -376,7 +377,7 @@ func (s *Service) CreateRoute(ctx context.Context, req dto.CreateRouteRequest) (
 	}
 	if s.files != nil {
 		if err := s.files.UpsertRoute(routeID, scope.AgencyID, shortName, longName, req.RouteType); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 		if err := s.files.UpsertCalendar(CalendarFileRow{
 			ServiceID: serviceID,
@@ -384,20 +385,20 @@ func (s *Service) CreateRoute(ctx context.Context, req dto.CreateRouteRequest) (
 			Thursday: cal.Thursday, Friday: cal.Friday, Saturday: cal.Saturday, Sunday: cal.Sunday,
 			StartDate: cal.StartDate, EndDate: cal.EndDate,
 		}); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 		for _, st := range stops {
 			if err := s.files.UpsertStop(st.StopID, st.Name, st.Lat, st.Lng); err != nil {
-				return nil, err
+				return nil, wrapGTFS(err)
 			}
 		}
 		if err := s.files.ReplaceShapes([]string{shapeID}, pts); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 		var rows []StopTimeFileRow
 		for _, tr := range tripInputs {
 			if err := s.files.UpsertTrip(tr.TripID, routeID, serviceID, shapeID, tr.Headsign); err != nil {
-				return nil, err
+				return nil, wrapGTFS(err)
 			}
 			for _, t := range tr.Timed {
 				rows = append(rows, StopTimeFileRow{
@@ -407,7 +408,7 @@ func (s *Service) CreateRoute(ctx context.Context, req dto.CreateRouteRequest) (
 			}
 		}
 		if err := s.files.ReplaceStopTimes(tripIDs, rows); err != nil {
-			return nil, err
+			return nil, wrapGTFS(err)
 		}
 	}
 	return &dto.CreateRouteResponse{
@@ -489,6 +490,13 @@ func normalizeTrips(trips []dto.CreateTripTimes, stops []dto.EditorStop, default
 		out = append(out, normalizedTrip{Headsign: hs, Timed: timed})
 	}
 	return out, nil
+}
+
+func wrapGTFS(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %v", ErrGTFSFiles, err)
 }
 
 func viaLngLats(stops []dto.EditorStop, wps []dto.Waypoint) [][2]float64 {

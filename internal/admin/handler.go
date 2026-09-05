@@ -2,6 +2,7 @@ package admin
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -172,7 +173,11 @@ func writeAdminErr(c *gin.Context, err error) {
 		response.Error(c, http.StatusBadGateway, "osrm_failed", "Impossible de coller le tracé sur les rues.")
 	case errors.Is(err, ErrTripActive):
 		response.Error(c, http.StatusConflict, "trip_active", "Une course est guidée en ce moment. Réessayez plus tard.")
+	case errors.Is(err, ErrGTFSFiles):
+		response.Error(c, http.StatusBadGateway, "gtfs_file_failed",
+			"Modification enregistrée en base, mais la synchronisation des fichiers GTFS a échoué (droits d’écriture ou espace disque sur le volume GTFS).")
 	default:
+		log.Printf("admin error: %v", err)
 		response.Error(c, http.StatusInternalServerError, "internal", "Erreur interne.")
 	}
 }
