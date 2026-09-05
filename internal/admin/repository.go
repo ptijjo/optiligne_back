@@ -150,11 +150,27 @@ func (r *Repository) LoadDraft(ctx context.Context, operatorCode, depotCode, rou
 			StopID: s.StopID, Name: s.Name, Sequence: s.StopSequence, Lat: s.Lat, Lng: s.Lon,
 		})
 	}
+	shape := guidancedto.DecodeLineString(raw)
+	if len(shape.Coordinates) < 2 {
+		shape = shapeFromStops(outStops)
+	}
 	return &dto.Draft{
 		RouteID: row.RouteID, ShortName: row.ShortName, LongName: row.LongName, RouteType: row.RouteType,
 		TripID: row.TripID, ShapeID: row.ShapeID, FeedID: row.FeedID, FeedVersion: row.FeedVersion,
-		Shape: guidancedto.DecodeLineString(raw), Stops: outStops,
+		Shape: shape, Stops: outStops,
 	}, nil
+}
+
+func shapeFromStops(stops []dto.EditorStop) guidancedto.LineString {
+	coords := make([][]float64, 0, len(stops))
+	for _, s := range stops {
+		coords = append(coords, []float64{s.Lng, s.Lat})
+	}
+	if len(coords) < 2 {
+		// Placeholder WGS84 pour passer le contrat front (évite un crash Zod).
+		coords = [][]float64{{6.9, 49.1}, {6.91, 49.12}}
+	}
+	return guidancedto.LineString{Type: "LineString", Coordinates: coords}
 }
 
 func (r *Repository) UpdateRouteType(ctx context.Context, feedID, routeID string, routeType int) error {
