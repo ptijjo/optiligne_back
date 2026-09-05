@@ -328,17 +328,27 @@ func (r *Repository) RebuildFracsForTrips(ctx context.Context, feedID string, tr
 	if len(tripIDs) == 0 {
 		return nil
 	}
+	// Sous-requête : PostgreSQL refuse de référencer la cible UPDATE (sf) dans un JOIN du FROM.
 	return r.db.WithContext(ctx).Exec(`
 		UPDATE stop_fracs AS sf
 		SET
-			frac = COALESCE(ST_LineLocatePoint(sh.geom, ST_SetSRID(ST_MakePoint(s.lon, s.lat), 4326)), sf.frac),
-			stop_name = COALESCE(s.name, sf.stop_name)
-		FROM trips t
-		JOIN shapes sh ON sh.shape_id = t.shape_id AND sh.feed_version_id = t.feed_version_id
-		JOIN stops s ON s.stop_id = sf.stop_id AND s.feed_version_id = sf.feed_version_id
-		WHERE sf.feed_version_id = ?
-		  AND sf.trip_id = t.trip_id AND t.feed_version_id = sf.feed_version_id
-		  AND sf.trip_id IN ?
+			frac = computed.frac,
+			stop_name = computed.stop_name
+		FROM (
+			SELECT
+				sf2.id AS id,
+				COALESCE(
+					ST_LineLocatePoint(sh.geom, ST_SetSRID(ST_MakePoint(s.lon, s.lat), 4326)),
+					sf2.frac
+				) AS frac,
+				COALESCE(s.name, sf2.stop_name) AS stop_name
+			FROM stop_fracs sf2
+			JOIN trips t ON t.trip_id = sf2.trip_id AND t.feed_version_id = sf2.feed_version_id
+			JOIN shapes sh ON sh.shape_id = t.shape_id AND sh.feed_version_id = t.feed_version_id
+			JOIN stops s ON s.stop_id = sf2.stop_id AND s.feed_version_id = sf2.feed_version_id
+			WHERE sf2.feed_version_id = ? AND sf2.trip_id IN ?
+		) AS computed
+		WHERE sf.id = computed.id
 	`, feedID, tripIDs).Error
 }
 
