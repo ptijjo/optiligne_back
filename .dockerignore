@@ -10,6 +10,9 @@
 .env.*
 !.env.example
 
+# Feed réel — fourni par volume / GTFS_DATA_DIR, pas par l'image
+GTFS/
+
 # Artefacts locaux
 *.exe
 *.test

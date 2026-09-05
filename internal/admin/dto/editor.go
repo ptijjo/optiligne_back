@@ -93,6 +93,46 @@ type SaveResponse struct {
 	Message     string `json:"message"`
 }
 
+// CreateRouteRequest crée une ligne (géo + calendrier + courses).
+type CreateRouteRequest struct {
+	OperatorCode string             `json:"operatorCode" binding:"required"`
+	DepotCode    string             `json:"depotCode" binding:"required"`
+	ShortName    string             `json:"shortName" binding:"required"`
+	LongName     string             `json:"longName" binding:"required"`
+	RouteType    int                `json:"routeType"`
+	Stops        []EditorStop       `json:"stops" binding:"required,min=2"`
+	Shape        dto.LineString     `json:"shape" binding:"required"`
+	Calendar     CreateCalendar     `json:"calendar"`
+	Trips        []CreateTripTimes  `json:"trips"`
+}
+
+// CreateCalendar est un service GTFS (jours + période).
+type CreateCalendar struct {
+	Monday    bool   `json:"monday"`
+	Tuesday   bool   `json:"tuesday"`
+	Wednesday bool   `json:"wednesday"`
+	Thursday  bool   `json:"thursday"`
+	Friday    bool   `json:"friday"`
+	Saturday  bool   `json:"saturday"`
+	Sunday    bool   `json:"sunday"`
+	StartDate string `json:"startDate"` // YYYYMMDD ou YYYY-MM-DD
+	EndDate   string `json:"endDate"`
+}
+
+// CreateTripTimes est une course sur le calendrier (horaires par arrêt, ordre = stops).
+type CreateTripTimes struct {
+	Headsign    string `json:"headsign"`
+	ArrivalSecs []int  `json:"arrivalSecs"`
+}
+
+// CreateRouteResponse renvoie les ids pour ouvrir l'éditeur.
+type CreateRouteResponse struct {
+	RouteID     string `json:"routeId"`
+	TripID      string `json:"tripId"`
+	FeedVersion string `json:"feedVersion"`
+	Message     string `json:"message"`
+}
+
 // TimedStop est un arrêt avec horaires (secondes depuis minuit service).
 type TimedStop struct {
 	StopID       string

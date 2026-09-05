@@ -24,6 +24,8 @@ type fakeStore struct {
 	searchHits      []dto.StopHit
 	existingStopIDs map[string]bool
 	lastRouteType   int
+	scope           *admin.ScopeInfo
+	created         *admin.CreateRouteInput
 }
 
 func (f *fakeStore) LoadDraft(_ context.Context, _, _, _, tripID string) (*dto.Draft, error) {
@@ -138,6 +140,35 @@ func (f *fakeStore) RebuildFracsForTrips(context.Context, string, []string) erro
 
 func (f *fakeStore) RecomputeFracs(context.Context, string, []string) error { return nil }
 
+func (f *fakeStore) ResolveScope(_ context.Context, _, _ string) (*admin.ScopeInfo, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.scope != nil {
+		return f.scope, nil
+	}
+	return &admin.ScopeInfo{
+		FeedID: "fv1", FeedVersion: "2026",
+		OperatorID: "op1", DepotID: "dep1",
+		AgencyID: "AG1", ServiceID: "SVC1",
+	}, nil
+}
+
+func (f *fakeStore) CreateRoute(_ context.Context, in admin.CreateRouteInput) error {
+	if f.err != nil {
+		return f.err
+	}
+	cp := in
+	cp.Stops = append([]dto.EditorStop(nil), in.Stops...)
+	cp.ShapePoints = append([]gtfs.ShapePoint(nil), in.ShapePoints...)
+	cp.Trips = append([]admin.TripInput(nil), in.Trips...)
+	for i := range cp.Trips {
+		cp.Trips[i].Timed = append([]dto.TimedStop(nil), in.Trips[i].Timed...)
+	}
+	f.created = &cp
+	return nil
+}
+
 type fakeRouter struct {
 	coords [][]float64
 	err    error
@@ -170,6 +201,9 @@ type fakeFiles struct {
 	upserts    int
 	stopTimes  int
 	routeTypes int
+	routes     int
+	trips      int
+	calendars  int
 }
 
 func (f *fakeFiles) PatchStop(string, float64, float64) error {
@@ -184,6 +218,21 @@ func (f *fakeFiles) PatchRouteType(string, int) error {
 
 func (f *fakeFiles) UpsertStop(string, string, float64, float64) error {
 	f.upserts++
+	return nil
+}
+
+func (f *fakeFiles) UpsertRoute(string, string, string, string, int) error {
+	f.routes++
+	return nil
+}
+
+func (f *fakeFiles) UpsertTrip(string, string, string, string, string) error {
+	f.trips++
+	return nil
+}
+
+func (f *fakeFiles) UpsertCalendar(admin.CalendarFileRow) error {
+	f.calendars++
 	return nil
 }
 
@@ -590,5 +639,109 @@ func TestSave_CreeNouveauStop(t *testing.T) {
 	}
 	if len(store.upserted) != 3 {
 		t.Fatalf("upserted = %d", len(store.upserted))
+	}
+}
+
+func createRouteReq() dto.CreateRouteRequest {
+	return dto.CreateRouteRequest{
+		OperatorCode: "transavold", DepotCode: "fluo57",
+		ShortName: "57S999", LongName: "Nouvelle ligne test", RouteType: 712,
+		Stops: []dto.EditorStop{
+			{StopID: "A", Name: "Départ", Sequence: 1, Lat: 49.1, Lng: 6.9},
+			{StopID: "B", Name: "École", Sequence: 2, Lat: 49.12, Lng: 6.91},
+		},
+		Shape: guidancedto.LineString{Type: "LineString", Coordinates: [][]float64{{6.9, 49.1}, {6.91, 49.12}}},
+		Calendar: dto.CreateCalendar{
+			Monday: true, Tuesday: true, Wednesday: true, Thursday: true, Friday: true,
+			StartDate: "20260901", EndDate: "20270630",
+		},
+		Trips: []dto.CreateTripTimes{
+			{Headsign: "École", ArrivalSecs: []int{7 * 3600, 7*3600 + 5*60}},
+		},
+	}
+}
+
+func TestCreateRoute_OK(t *testing.T) {
+	store := &fakeStore{}
+	files := &fakeFiles{}
+	svc := admin.NewService(store, fakeRouter{}, files, nil, "")
+	out, err := svc.CreateRoute(context.Background(), createRouteReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.RouteID == "" || out.TripID == "" || out.FeedVersion != "2026" {
+		t.Fatalf("%+v", out)
+	}
+	if !strings.HasPrefix(out.RouteID, "ol-r-") || !strings.HasPrefix(out.TripID, "ol-t-") {
+		t.Fatalf("ids = %s / %s", out.RouteID, out.TripID)
+	}
+	if store.created == nil || store.created.RouteType != 712 || len(store.created.Trips) != 1 {
+		t.Fatalf("created = %+v", store.created)
+	}
+	timed := store.created.Trips[0].Timed
+	if timed[0].ArrivalSec != 7*3600 || timed[1].ArrivalSec != 7*3600+5*60 {
+		t.Fatalf("times = %+v", timed)
+	}
+	if store.created.Calendar.Monday != true || store.created.Calendar.StartDate != "20260901" {
+		t.Fatalf("calendar = %+v", store.created.Calendar)
+	}
+	if files.routes != 1 || files.trips != 1 || files.calendars != 1 || files.shapes != 1 || files.stopTimes != 1 || files.upserts != 2 {
+		t.Fatalf("files = %+v", files)
+	}
+	if !strings.Contains(out.Message, "Ligne créée") {
+		t.Fatalf("message = %q", out.Message)
+	}
+}
+
+func TestCreateRoute_RefuseTypeInvalide(t *testing.T) {
+	req := createRouteReq()
+	req.RouteType = 999
+	svc := admin.NewService(&fakeStore{}, fakeRouter{}, &fakeFiles{}, nil, "")
+	_, err := svc.CreateRoute(context.Background(), req)
+	if err != admin.ErrInvalidRouteType {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateRoute_ScopeRequired(t *testing.T) {
+	req := createRouteReq()
+	req.DepotCode = ""
+	svc := admin.NewService(&fakeStore{}, fakeRouter{}, &fakeFiles{}, nil, "")
+	_, err := svc.CreateRoute(context.Background(), req)
+	if err != catalog.ErrScopeRequired {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateRoute_TropPeuArrets(t *testing.T) {
+	req := createRouteReq()
+	req.Stops = []dto.EditorStop{
+		{StopID: "A", Name: "Seul", Sequence: 1, Lat: 49.1, Lng: 6.9},
+	}
+	req.Trips = []dto.CreateTripTimes{{ArrivalSecs: []int{7 * 3600}}}
+	svc := admin.NewService(&fakeStore{}, fakeRouter{}, &fakeFiles{}, nil, "")
+	_, err := svc.CreateRoute(context.Background(), req)
+	if err != admin.ErrTooFewStops {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateRoute_RefuseCalendrierVide(t *testing.T) {
+	req := createRouteReq()
+	req.Calendar = dto.CreateCalendar{StartDate: "20260901", EndDate: "20270630"}
+	svc := admin.NewService(&fakeStore{}, fakeRouter{}, &fakeFiles{}, nil, "")
+	_, err := svc.CreateRoute(context.Background(), req)
+	if err != admin.ErrInvalidCalendar {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateRoute_RefuseHorairesIncoherents(t *testing.T) {
+	req := createRouteReq()
+	req.Trips = []dto.CreateTripTimes{{ArrivalSecs: []int{8 * 3600, 7 * 3600}}}
+	svc := admin.NewService(&fakeStore{}, fakeRouter{}, &fakeFiles{}, nil, "")
+	_, err := svc.CreateRoute(context.Background(), req)
+	if err != admin.ErrInvalidSchedule {
+		t.Fatalf("err = %v", err)
 	}
 }

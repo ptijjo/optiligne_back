@@ -9,6 +9,7 @@ import (
 	"github.com/ptijjo/optiligne_back/internal/admin/dto"
 	"github.com/ptijjo/optiligne_back/internal/catalog"
 	guidancedto "github.com/ptijjo/optiligne_back/internal/guidance/dto"
+	"github.com/ptijjo/optiligne_back/pkg/id"
 )
 
 // SessionGuard refuse d'écraser une course guidée en live.
@@ -290,6 +291,204 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 		FeedVersion: draft.FeedVersion,
 		Message:     msg,
 	}, nil
+}
+
+const placeholderStartSec = 7 * 3600
+const placeholderStepSec = 5 * 60
+
+// CreateRoute crée une ligne (PostGIS + GTFS/) avec calendrier et courses.
+func (s *Service) CreateRoute(ctx context.Context, req dto.CreateRouteRequest) (*dto.CreateRouteResponse, error) {
+	op, depot, err := s.resolve(req.OperatorCode, req.DepotCode)
+	if err != nil {
+		return nil, err
+	}
+	if !allowedRouteType(req.RouteType) {
+		return nil, ErrInvalidRouteType
+	}
+	shortName := strings.TrimSpace(req.ShortName)
+	longName := strings.TrimSpace(req.LongName)
+	if shortName == "" || longName == "" {
+		return nil, ErrInvalidCoords
+	}
+	if len(req.Shape.Coordinates) < 2 {
+		return nil, ErrShapeTooShort
+	}
+	stops, err := normalizeStops(req.Stops)
+	if err != nil {
+		return nil, err
+	}
+	for _, pt := range req.Shape.Coordinates {
+		if len(pt) < 2 || !validCoords(pt[1], pt[0]) {
+			return nil, ErrInvalidCoords
+		}
+	}
+	cal, err := normalizeCalendar(req.Calendar)
+	if err != nil {
+		return nil, err
+	}
+	tripReqs := req.Trips
+	if len(tripReqs) == 0 {
+		// Compat : une course placeholders si pas d'horaires fournis.
+		secs := make([]int, len(stops))
+		for i := range stops {
+			secs[i] = placeholderStartSec + i*placeholderStepSec
+		}
+		tripReqs = []dto.CreateTripTimes{{Headsign: longName, ArrivalSecs: secs}}
+	}
+	trips, err := normalizeTrips(tripReqs, stops, longName)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := s.store.ResolveScope(ctx, op, depot)
+	if err != nil {
+		return nil, err
+	}
+
+	routeID := "ol-r-" + id.New()
+	shapeID := "ol-s-" + id.New()
+	serviceID := "ol-c-" + id.New()
+	pts := coordsToPoints(req.Shape.Coordinates)
+	tripInputs := make([]TripInput, 0, len(trips))
+	tripIDs := make([]string, 0, len(trips))
+	for _, tr := range trips {
+		tid := "ol-t-" + id.New()
+		tripIDs = append(tripIDs, tid)
+		tripInputs = append(tripInputs, TripInput{TripID: tid, Headsign: tr.Headsign, Timed: tr.Timed})
+	}
+	in := CreateRouteInput{
+		FeedID: scope.FeedID, OperatorID: scope.OperatorID, DepotID: scope.DepotID,
+		AgencyID: scope.AgencyID,
+		RouteID: routeID, ShortName: shortName, LongName: longName, RouteType: req.RouteType,
+		ShapeID: shapeID, Stops: stops, ShapePoints: pts,
+		Calendar: CalendarInput{
+			ServiceID: serviceID,
+			Monday: cal.Monday, Tuesday: cal.Tuesday, Wednesday: cal.Wednesday,
+			Thursday: cal.Thursday, Friday: cal.Friday, Saturday: cal.Saturday, Sunday: cal.Sunday,
+			StartDate: cal.StartDate, EndDate: cal.EndDate,
+		},
+		Trips: tripInputs,
+	}
+	if err := s.store.CreateRoute(ctx, in); err != nil {
+		return nil, err
+	}
+	if err := s.store.RebuildFracsForTrips(ctx, scope.FeedID, tripIDs); err != nil {
+		return nil, err
+	}
+	if s.files != nil {
+		if err := s.files.UpsertRoute(routeID, scope.AgencyID, shortName, longName, req.RouteType); err != nil {
+			return nil, err
+		}
+		if err := s.files.UpsertCalendar(CalendarFileRow{
+			ServiceID: serviceID,
+			Monday: cal.Monday, Tuesday: cal.Tuesday, Wednesday: cal.Wednesday,
+			Thursday: cal.Thursday, Friday: cal.Friday, Saturday: cal.Saturday, Sunday: cal.Sunday,
+			StartDate: cal.StartDate, EndDate: cal.EndDate,
+		}); err != nil {
+			return nil, err
+		}
+		for _, st := range stops {
+			if err := s.files.UpsertStop(st.StopID, st.Name, st.Lat, st.Lng); err != nil {
+				return nil, err
+			}
+		}
+		if err := s.files.ReplaceShapes([]string{shapeID}, pts); err != nil {
+			return nil, err
+		}
+		var rows []StopTimeFileRow
+		for _, tr := range tripInputs {
+			if err := s.files.UpsertTrip(tr.TripID, routeID, serviceID, shapeID, tr.Headsign); err != nil {
+				return nil, err
+			}
+			for _, t := range tr.Timed {
+				rows = append(rows, StopTimeFileRow{
+					TripID: tr.TripID, StopID: t.StopID, StopSequence: t.StopSequence,
+					ArrivalSec: t.ArrivalSec, DepartureSec: t.DepartureSec,
+				})
+			}
+		}
+		if err := s.files.ReplaceStopTimes(tripIDs, rows); err != nil {
+			return nil, err
+		}
+	}
+	return &dto.CreateRouteResponse{
+		RouteID: routeID, TripID: tripIDs[0], FeedVersion: scope.FeedVersion,
+		Message: "Ligne créée. Les téléphones du dépôt la verront au prochain chargement du catalogue.",
+	}, nil
+}
+
+func normalizeCalendar(c dto.CreateCalendar) (dto.CreateCalendar, error) {
+	start, err := normalizeGTFSDate(c.StartDate)
+	if err != nil {
+		return c, ErrInvalidCalendar
+	}
+	end, err := normalizeGTFSDate(c.EndDate)
+	if err != nil {
+		return c, ErrInvalidCalendar
+	}
+	if start > end {
+		return c, ErrInvalidCalendar
+	}
+	anyDay := c.Monday || c.Tuesday || c.Wednesday || c.Thursday || c.Friday || c.Saturday || c.Sunday
+	if !anyDay {
+		return c, ErrInvalidCalendar
+	}
+	c.StartDate = start
+	c.EndDate = end
+	return c, nil
+}
+
+func normalizeGTFSDate(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	s = strings.ReplaceAll(s, "-", "")
+	if len(s) != 8 {
+		return "", ErrInvalidCalendar
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return "", ErrInvalidCalendar
+		}
+	}
+	return s, nil
+}
+
+type normalizedTrip struct {
+	Headsign string
+	Timed    []dto.TimedStop
+}
+
+func normalizeTrips(trips []dto.CreateTripTimes, stops []dto.EditorStop, defaultHeadsign string) ([]normalizedTrip, error) {
+	if len(trips) == 0 {
+		return nil, ErrInvalidSchedule
+	}
+	out := make([]normalizedTrip, 0, len(trips))
+	for _, tr := range trips {
+		if len(tr.ArrivalSecs) != len(stops) {
+			return nil, ErrInvalidSchedule
+		}
+		timed := make([]dto.TimedStop, len(stops))
+		prev := -1
+		for i, st := range stops {
+			sec := tr.ArrivalSecs[i]
+			if sec < 0 || sec > 48*3600 {
+				return nil, ErrInvalidSchedule
+			}
+			if sec < prev {
+				return nil, ErrInvalidSchedule
+			}
+			prev = sec
+			timed[i] = dto.TimedStop{
+				StopID: st.StopID, StopSequence: i + 1,
+				ArrivalSec: sec, DepartureSec: sec,
+				Name: st.Name, Lat: st.Lat, Lng: st.Lng,
+			}
+		}
+		hs := strings.TrimSpace(tr.Headsign)
+		if hs == "" {
+			hs = defaultHeadsign
+		}
+		out = append(out, normalizedTrip{Headsign: hs, Timed: timed})
+	}
+	return out, nil
 }
 
 func viaLngLats(stops []dto.EditorStop, wps []dto.Waypoint) [][2]float64 {

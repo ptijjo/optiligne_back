@@ -1,2 +1,0 @@
-﻿agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_phone,agency_fare_url,agency_email
-619,"Fluo Grand Est 57",https://www.fluo.grandest.fr,Europe/Paris,fr,09 70 80 90 10,,contact@fluo.eu

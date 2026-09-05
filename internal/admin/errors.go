@@ -9,4 +9,6 @@ var (
 	ErrTripActive       = errors.New("trip_active")
 	ErrShapeTooShort    = errors.New("shape_too_short")
 	ErrTooFewStops      = errors.New("too_few_stops")
+	ErrInvalidCalendar  = errors.New("invalid_calendar")
+	ErrInvalidSchedule  = errors.New("invalid_schedule")
 )

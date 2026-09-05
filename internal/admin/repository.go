@@ -37,6 +37,56 @@ type Store interface {
 	ReplaceTripStopTimes(ctx context.Context, feedID, tripID string, stops []dto.TimedStop) error
 	RebuildFracsForTrips(ctx context.Context, feedID string, tripIDs []string) error
 	RecomputeFracs(ctx context.Context, feedID string, shapeIDs []string) error
+	ResolveScope(ctx context.Context, operatorCode, depotCode string) (*ScopeInfo, error)
+	CreateRoute(ctx context.Context, in CreateRouteInput) error
+}
+
+// ScopeInfo est le contexte feed + affectation pour créer une ligne.
+type ScopeInfo struct {
+	FeedID      string
+	FeedVersion string
+	OperatorID  string
+	DepotID     string
+	AgencyID    string
+	ServiceID   string
+}
+
+// CreateRouteInput est le bundle PostGIS pour une nouvelle ligne.
+type CreateRouteInput struct {
+	FeedID      string
+	OperatorID  string
+	DepotID     string
+	AgencyID    string
+	RouteID     string
+	ShortName   string
+	LongName    string
+	RouteType   int
+	ShapeID     string
+	Stops       []dto.EditorStop
+	ShapePoints []gtfs.ShapePoint
+	Calendar    CalendarInput
+	Trips       []TripInput
+}
+
+// CalendarInput est un calendrier GTFS à créer.
+type CalendarInput struct {
+	ServiceID string
+	Monday    bool
+	Tuesday   bool
+	Wednesday bool
+	Thursday  bool
+	Friday    bool
+	Saturday  bool
+	Sunday    bool
+	StartDate string
+	EndDate   string
+}
+
+// TripInput est une course avec horaires.
+type TripInput struct {
+	TripID   string
+	Headsign string
+	Timed    []dto.TimedStop
 }
 
 // Repository GORM + PostGIS.
@@ -314,4 +364,138 @@ func (r *Repository) RecomputeFracs(ctx context.Context, feedID string, shapeIDs
 		) AS computed
 		WHERE sf.id = computed.id
 	`, feedID, shapeIDs).Error
+}
+
+func (r *Repository) ResolveScope(ctx context.Context, operatorCode, depotCode string) (*ScopeInfo, error) {
+	var row struct {
+		FeedID      string
+		FeedVersion string
+		OperatorID  string
+		DepotID     string
+		AgencyID    string
+		ServiceID   string
+	}
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT fv.id AS feed_id, fv.feed_version, o.id AS operator_id, d.id AS depot_id,
+		       COALESCE((
+		         SELECT r.agency_id FROM routes r
+		         WHERE r.feed_version_id = fv.id AND r.agency_id <> ''
+		         LIMIT 1
+		       ), '') AS agency_id,
+		       COALESCE((
+		         SELECT t.service_id FROM trips t
+		         WHERE t.feed_version_id = fv.id AND t.service_id <> ''
+		         LIMIT 1
+		       ), 'ol-service') AS service_id
+		FROM operators o
+		JOIN depots d ON d.operator_id = o.id
+		CROSS JOIN feed_versions fv
+		WHERE o.code = ? AND d.code = ? AND fv.active = true
+		LIMIT 1
+	`, operatorCode, depotCode).Scan(&row).Error
+	if err != nil {
+		return nil, err
+	}
+	if row.FeedID == "" || row.OperatorID == "" || row.DepotID == "" {
+		return nil, catalog.ErrScopeRequired
+	}
+	if row.ServiceID == "" {
+		row.ServiceID = "ol-service"
+	}
+	return &ScopeInfo{
+		FeedID: row.FeedID, FeedVersion: row.FeedVersion,
+		OperatorID: row.OperatorID, DepotID: row.DepotID,
+		AgencyID: row.AgencyID, ServiceID: row.ServiceID,
+	}, nil
+}
+
+func (r *Repository) CreateRoute(ctx context.Context, in CreateRouteInput) error {
+	if len(in.ShapePoints) < 2 {
+		return ErrShapeTooShort
+	}
+	if len(in.Trips) == 0 {
+		return ErrInvalidSchedule
+	}
+	wkt := gtfs.LineStringWKT(in.ShapePoints)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		route := models.Route{
+			ID: id.New(), FeedVersionID: in.FeedID, RouteID: in.RouteID,
+			AgencyID: in.AgencyID, ShortName: in.ShortName, LongName: in.LongName, RouteType: in.RouteType,
+		}
+		if err := tx.Create(&route).Error; err != nil {
+			return err
+		}
+		assign := models.RouteAssignment{
+			ID: id.New(), FeedVersionID: in.FeedID,
+			OperatorID: in.OperatorID, DepotID: in.DepotID, RouteID: in.RouteID,
+		}
+		if err := tx.Create(&assign).Error; err != nil {
+			return err
+		}
+		cal := models.Calendar{
+			ID: id.New(), FeedVersionID: in.FeedID, ServiceID: in.Calendar.ServiceID,
+			Monday: in.Calendar.Monday, Tuesday: in.Calendar.Tuesday, Wednesday: in.Calendar.Wednesday,
+			Thursday: in.Calendar.Thursday, Friday: in.Calendar.Friday,
+			Saturday: in.Calendar.Saturday, Sunday: in.Calendar.Sunday,
+			StartDate: in.Calendar.StartDate, EndDate: in.Calendar.EndDate,
+		}
+		if err := tx.Create(&cal).Error; err != nil {
+			return err
+		}
+		shape := models.Shape{ID: id.New(), FeedVersionID: in.FeedID, ShapeID: in.ShapeID}
+		if err := tx.Create(&shape).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(
+			`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE feed_version_id = ? AND shape_id = ?`,
+			wkt, in.FeedID, in.ShapeID,
+		).Error; err != nil {
+			return err
+		}
+		for _, st := range in.Stops {
+			res := tx.Exec(
+				`UPDATE stops SET lat = ?, lon = ?, name = ? WHERE feed_version_id = ? AND stop_id = ?`,
+				st.Lat, st.Lng, st.Name, in.FeedID, st.StopID,
+			)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				if err := tx.Create(&models.Stop{
+					ID: id.New(), FeedVersionID: in.FeedID, StopID: st.StopID,
+					Name: st.Name, Lat: st.Lat, Lon: st.Lng,
+				}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		for _, tr := range in.Trips {
+			trip := models.Trip{
+				ID: id.New(), FeedVersionID: in.FeedID, TripID: tr.TripID,
+				RouteID: in.RouteID, ServiceID: in.Calendar.ServiceID, ShapeID: in.ShapeID, Headsign: tr.Headsign,
+			}
+			if err := tx.Create(&trip).Error; err != nil {
+				return err
+			}
+			for _, st := range tr.Timed {
+				row := models.StopTime{
+					ID: id.New(), FeedVersionID: in.FeedID, TripID: tr.TripID,
+					StopID: st.StopID, StopSequence: st.StopSequence,
+					ArrivalSec: st.ArrivalSec, DepartureSec: st.DepartureSec,
+				}
+				if err := tx.Create(&row).Error; err != nil {
+					return err
+				}
+				frac := models.StopFrac{
+					ID: id.New(), FeedVersionID: in.FeedID, TripID: tr.TripID,
+					StopID: st.StopID, StopSequence: st.StopSequence,
+					Frac: 0, ArrivalSec: st.ArrivalSec, StopName: st.Name,
+				}
+				if err := tx.Create(&frac).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }

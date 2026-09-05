@@ -47,3 +47,6 @@ go.work.sum
 # Debug (Delve / VS Code / Cursor)
 __debug_bin*
 debug
+
+# Feed réel (local / volume prod). Les fixtures restent dans test/fixtures/gtfs/.
+/GTFS/

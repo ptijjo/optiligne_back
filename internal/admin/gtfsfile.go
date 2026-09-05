@@ -17,6 +17,9 @@ type Files interface {
 	PatchStop(stopID string, lat, lng float64) error
 	PatchRouteType(routeID string, routeType int) error
 	UpsertStop(stopID, name string, lat, lng float64) error
+	UpsertRoute(routeID, agencyID, shortName, longName string, routeType int) error
+	UpsertTrip(tripID, routeID, serviceID, shapeID, headsign string) error
+	UpsertCalendar(cal CalendarFileRow) error
 	ReplaceShape(shapeID string, pts []gtfs.ShapePoint) error
 	ReplaceShapes(shapeIDs []string, pts []gtfs.ShapePoint) error
 	ReplaceStopTimes(tripIDs []string, rows []StopTimeFileRow) error
@@ -29,6 +32,20 @@ type StopTimeFileRow struct {
 	StopSequence int
 	ArrivalSec   int
 	DepartureSec int
+}
+
+// CalendarFileRow est une ligne calendar.txt.
+type CalendarFileRow struct {
+	ServiceID string
+	Monday    bool
+	Tuesday   bool
+	Wednesday bool
+	Thursday  bool
+	Friday    bool
+	Saturday  bool
+	Sunday    bool
+	StartDate string
+	EndDate   string
 }
 
 // GTFSFiles écrit stops.txt, shapes.txt et stop_times.txt.
@@ -64,6 +81,131 @@ func (f *GTFSFiles) PatchRouteType(routeID string, routeType int) error {
 		setCol(header, out, "route_type", strconv.Itoa(routeType))
 		return out
 	})
+}
+
+func (f *GTFSFiles) UpsertRoute(routeID, agencyID, shortName, longName string, routeType int) error {
+	path := filepath.Join(f.Dir, "routes.txt")
+	return upsertCSVRow(path, "route_id", routeID, func(header []string, row []string) {
+		setCol(header, row, "route_id", routeID)
+		if agencyID != "" {
+			setCol(header, row, "agency_id", agencyID)
+		}
+		setCol(header, row, "route_short_name", shortName)
+		setCol(header, row, "route_long_name", longName)
+		setCol(header, row, "route_type", strconv.Itoa(routeType))
+	})
+}
+
+func (f *GTFSFiles) UpsertTrip(tripID, routeID, serviceID, shapeID, headsign string) error {
+	path := filepath.Join(f.Dir, "trips.txt")
+	return upsertCSVRow(path, "trip_id", tripID, func(header []string, row []string) {
+		setCol(header, row, "trip_id", tripID)
+		setCol(header, row, "route_id", routeID)
+		setCol(header, row, "service_id", serviceID)
+		setCol(header, row, "shape_id", shapeID)
+		setCol(header, row, "trip_headsign", headsign)
+	})
+}
+
+func (f *GTFSFiles) UpsertCalendar(cal CalendarFileRow) error {
+	path := filepath.Join(f.Dir, "calendar.txt")
+	return upsertCSVRow(path, "service_id", cal.ServiceID, func(header []string, row []string) {
+		setCol(header, row, "service_id", cal.ServiceID)
+		setCol(header, row, "monday", bool01(cal.Monday))
+		setCol(header, row, "tuesday", bool01(cal.Tuesday))
+		setCol(header, row, "wednesday", bool01(cal.Wednesday))
+		setCol(header, row, "thursday", bool01(cal.Thursday))
+		setCol(header, row, "friday", bool01(cal.Friday))
+		setCol(header, row, "saturday", bool01(cal.Saturday))
+		setCol(header, row, "sunday", bool01(cal.Sunday))
+		setCol(header, row, "start_date", cal.StartDate)
+		setCol(header, row, "end_date", cal.EndDate)
+	})
+}
+
+func bool01(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
+func upsertCSVRow(path, idCol, idVal string, apply func(header, row []string)) error {
+	in, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	r := csv.NewReader(in)
+	r.LazyQuotes = true
+	r.FieldsPerRecord = -1
+	header, err := r.Read()
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "gtfs-*.txt")
+	if err != nil {
+		return err
+	}
+	w := csv.NewWriter(tmp)
+	if err := w.Write(header); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	found := false
+	for {
+		row, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return err
+		}
+		if col(header, row, idCol) == idVal {
+			found = true
+			out := make([]string, len(header))
+			copy(out, row)
+			if len(out) < len(header) {
+				out = make([]string, len(header))
+			}
+			apply(header, out)
+			if err := w.Write(out); err != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				return err
+			}
+			continue
+		}
+		if err := w.Write(row); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return err
+		}
+	}
+	if !found {
+		nr := make([]string, len(header))
+		apply(header, nr)
+		if err := w.Write(nr); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	_ = in.Close()
+	return os.Rename(tmp.Name(), path)
 }
 
 // UpsertStop met à jour ou ajoute une ligne dans stops.txt.

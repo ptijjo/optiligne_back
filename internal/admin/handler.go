@@ -25,6 +25,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	g := r.Group("/admin")
 	g.Use(auth.Bearer(h.authSvc))
 	g.GET("/stops", h.searchStops)
+	g.POST("/routes", h.create)
 	g.GET("/routes/:routeId", h.draft)
 	g.PATCH("/routes/:routeId/stops", h.patchStop)
 	g.PATCH("/routes/:routeId/type", h.patchRouteType)
@@ -47,6 +48,20 @@ func (h *Handler) searchStops(c *gin.Context) {
 func (h *Handler) draft(c *gin.Context) {
 	op, depot := scope(c)
 	out, err := h.svc.Draft(c.Request.Context(), op, depot, c.Param("routeId"), c.Query("trip_id"))
+	if err != nil {
+		writeAdminErr(c, err)
+		return
+	}
+	response.OK(c, out)
+}
+
+func (h *Handler) create(c *gin.Context) {
+	var req dto.CreateRouteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid_coords", "Requête invalide.")
+		return
+	}
+	out, err := h.svc.CreateRoute(c.Request.Context(), req)
 	if err != nil {
 		writeAdminErr(c, err)
 		return
@@ -147,6 +162,10 @@ func writeAdminErr(c *gin.Context, err error) {
 		response.Error(c, http.StatusNotFound, "route_not_found", "Ligne ou course introuvable.")
 	case errors.Is(err, ErrInvalidRouteType):
 		response.Error(c, http.StatusBadRequest, "invalid_route_type", "Type de ligne invalide.")
+	case errors.Is(err, ErrInvalidCalendar):
+		response.Error(c, http.StatusBadRequest, "invalid_calendar", "Jours de circulation ou période invalides.")
+	case errors.Is(err, ErrInvalidSchedule):
+		response.Error(c, http.StatusBadRequest, "invalid_schedule", "Horaires de course invalides.")
 	case errors.Is(err, ErrInvalidCoords), errors.Is(err, ErrShapeTooShort), errors.Is(err, ErrTooFewStops):
 		response.Error(c, http.StatusBadRequest, "invalid_coords", "Coordonnées ou séquence d’arrêts invalides.")
 	case errors.Is(err, ErrOSRM):
