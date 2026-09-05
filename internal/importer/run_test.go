@@ -43,6 +43,41 @@ func TestAssignedShapeIDs_UniquementRoutesAffectees(t *testing.T) {
 	}
 }
 
+func TestShouldSkipMissingGTFS(t *testing.T) {
+	empty := t.TempDir()
+	_, file, _, _ := runtime.Caller(0)
+	complete := filepath.Join(filepath.Dir(file), "..", "..", "test", "fixtures", "gtfs")
+
+	tests := []struct {
+		name     string
+		dir      string
+		hasFeed  bool
+		wantSkip bool
+		wantErr  bool
+	}{
+		{name: "dossier complet", dir: complete, hasFeed: false, wantSkip: false},
+		{name: "vide mais feed en base", dir: empty, hasFeed: true, wantSkip: true},
+		{name: "vide sans feed", dir: empty, hasFeed: false, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			skip, err := shouldSkipMissingGTFS(tt.dir, tt.hasFeed)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("attendu une erreur")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if skip != tt.wantSkip {
+				t.Fatalf("skip = %v, want %v", skip, tt.wantSkip)
+			}
+		})
+	}
+}
+
 func TestModelStops_SkipEmptyAndDups(t *testing.T) {
 	got := modelStops("feed-1", []gtfs.Stop{
 		{StopID: "A", Name: "Premier"},

@@ -75,6 +75,16 @@ var requiredFiles = []string{
 	"stop_times.txt", "shapes.txt", "calendar.txt", "feed_info.txt",
 }
 
+// DirComplete indique si le dossier contient les .txt GTFS obligatoires.
+func DirComplete(dir string) bool {
+	for _, name := range requiredFiles {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseDir lit un dossier GTFS de fichiers .txt (shapes inclus, pour fixtures).
 func ParseDir(dir string) (*Feed, error) {
 	return parseDir(dir, true)
@@ -86,10 +96,8 @@ func ParseDirWithoutShapes(dir string) (*Feed, error) {
 }
 
 func parseDir(dir string, withShapes bool) (*Feed, error) {
-	for _, name := range requiredFiles {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			return nil, fmt.Errorf("gtfs: fichier manquant %s: %w", name, err)
-		}
+	if !DirComplete(dir) {
+		return nil, fmt.Errorf("gtfs: dossier incomplet %s", dir)
 	}
 	feed := &Feed{ShapePoints: map[string][]ShapePoint{}}
 	if err := parseFeedInfo(filepath.Join(dir, "feed_info.txt"), feed); err != nil {

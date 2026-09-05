@@ -39,8 +39,38 @@ func Run() error {
 	return nil
 }
 
+// shouldSkipMissingGTFS : pas de fichiers dans l'image, mais un feed déjà en base (prod).
+func shouldSkipMissingGTFS(gtfsDir string, hasActiveFeed bool) (bool, error) {
+	if gtfs.DirComplete(gtfsDir) {
+		return false, nil
+	}
+	if hasActiveFeed {
+		return true, nil
+	}
+	return false, fmt.Errorf("gtfs: dossier incomplet (%s) et aucun feed actif en base — définir GTFS_DATA_DIR (volume)", gtfsDir)
+}
+
 // Import parse le feed et les affectations, persist en base.
 func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, error) {
+	// 0. Feed déjà en Postgres, fichiers absents de l'image → démarrer l'API.
+	var active models.FeedVersion
+	activeErr := db.WithContext(ctx).Where("active = ?", true).First(&active).Error
+	if activeErr != nil && !errors.Is(activeErr, gorm.ErrRecordNotFound) {
+		return 0, activeErr
+	}
+	skip, err := shouldSkipMissingGTFS(gtfsDir, activeErr == nil)
+	if err != nil {
+		return 0, err
+	}
+	if skip {
+		log.Printf("GTFS absent de l'image, conservation du feed %s déjà en base", active.FeedVersion)
+		var n int64
+		if err := db.WithContext(ctx).Model(&models.Route{}).Where("feed_version_id = ?", active.ID).Count(&n).Error; err != nil {
+			return 0, err
+		}
+		return int(n), nil
+	}
+
 	// 1. Parser le feed sans charger shapes.txt en mémoire.
 	feed, err := gtfs.ParseDirWithoutShapes(gtfsDir)
 	if err != nil {

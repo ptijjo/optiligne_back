@@ -134,6 +134,18 @@ func TestParseDir_IgnoreStopIDVide(t *testing.T) {
 	}
 }
 
+func TestDirComplete_FixtureOK(t *testing.T) {
+	if !gtfs.DirComplete(fixtureDir(t)) {
+		t.Fatal("fixture GTFS doit être complète")
+	}
+}
+
+func TestDirComplete_DossierVide(t *testing.T) {
+	if gtfs.DirComplete(t.TempDir()) {
+		t.Fatal("dossier vide ne doit pas être complet")
+	}
+}
+
 func TestParseDir_RefuseDossierIncomplet(t *testing.T) {
 	_, err := gtfs.ParseDir(t.TempDir())
 	if err == nil {
