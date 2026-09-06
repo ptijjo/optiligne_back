@@ -15,13 +15,14 @@ import (
 
 // Session est une session de guidage en mémoire.
 type Session struct {
-	ID            string
-	TripID        string
-	FeedVersionID string
-	ShapeID       string
-	PrevFrac      float64
+	ID              string
+	TripID          string
+	FeedVersionID   string
+	ShapeID         string
+	PrevFrac        float64
 	ServiceMidnight time.Time
-	Stops         []StopProg
+	Stops           []StopProg
+	ShapeLengthM    float64
 }
 
 // Service orchestre périmètre + snap + Evaluate.
@@ -87,15 +88,9 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 		return nil, err
 	}
 
-	var fracs []models.StopFrac
-	if err := s.db.WithContext(ctx).Where("feed_version_id = ? AND trip_id = ?", row.FeedVersionID, tripID).
-		Order("stop_sequence").Find(&fracs).Error; err != nil {
-		return nil, err
-	}
-	stops := make([]StopProg, 0, len(fracs))
-	for _, f := range fracs {
-		stops = append(stops, StopProg{Name: f.StopName, Frac: f.Frac, ArrivalSec: f.ArrivalSec, Sequence: f.StopSequence})
-	}
+	mapStops := s.loadStopPoints(ctx, row.FeedVersionID, tripID)
+	stops := s.buildStopProg(ctx, row.FeedVersionID, tripID, mapStops)
+	shapeLen := geo.ShapeLengthM(ctx, s.db, row.FeedVersionID, row.ShapeID)
 
 	sess := &Session{
 		ID:              id.New(),
@@ -104,19 +99,62 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 		ShapeID:         row.ShapeID,
 		ServiceMidnight: time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location()),
 		Stops:           stops,
+		ShapeLengthM:    shapeLen,
 	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
 
 	shape := s.loadShape(ctx, row.FeedVersionID, row.ShapeID)
-	mapStops := s.loadStopPoints(ctx, row.FeedVersionID, tripID)
 	return &dto.StartResponse{
 		SessionID: sess.ID,
 		TripID:    tripID,
 		Shape:     shape,
 		Stops:     mapStops,
 	}, nil
+}
+
+func (s *Service) buildStopProg(ctx context.Context, feedVersionID, tripID string, mapStops []dto.StopPoint) []StopProg {
+	var fracs []models.StopFrac
+	_ = s.db.WithContext(ctx).Where("feed_version_id = ? AND trip_id = ?", feedVersionID, tripID).
+		Order("stop_sequence").Find(&fracs).Error
+
+	coordsBySeq := map[int]dto.StopPoint{}
+	for _, m := range mapStops {
+		coordsBySeq[m.Sequence] = m
+	}
+
+	if len(fracs) > 0 {
+		out := make([]StopProg, 0, len(fracs))
+		for _, f := range fracs {
+			sp := StopProg{
+				Name: f.StopName, Frac: f.Frac, ArrivalSec: f.ArrivalSec, Sequence: f.StopSequence,
+			}
+			if c, ok := coordsBySeq[f.StopSequence]; ok {
+				sp.Lon, sp.Lat = c.Lon, c.Lat
+				if sp.Name == "" {
+					sp.Name = c.Name
+				}
+			}
+			out = append(out, sp)
+		}
+		return out
+	}
+
+	// Fallback : pas de fracs → progression linéaire par index.
+	out := make([]StopProg, 0, len(mapStops))
+	n := len(mapStops)
+	for i, m := range mapStops {
+		frac := 0.0
+		if n > 1 {
+			frac = float64(i) / float64(n-1)
+		}
+		out = append(out, StopProg{
+			Name: m.Name, Frac: frac, ArrivalSec: m.ArrivalSec, Sequence: m.Sequence,
+			Lon: m.Lon, Lat: m.Lat,
+		})
+	}
+	return out
 }
 
 func (s *Service) loadShape(ctx context.Context, feedVersionID, shapeID string) dto.LineString {
@@ -176,6 +214,39 @@ func (s *Service) loadStopPoints(ctx context.Context, feedVersionID, tripID stri
 	return out
 }
 
+func remainingMeters(sess *Session, frac, offsetM, offRouteM, lon, lat float64) float64 {
+	if sess == nil || len(sess.Stops) == 0 {
+		return 0
+	}
+	offRoute := offRouteM > 0 && offsetM > offRouteM
+	first := sess.Stops[0]
+
+	if offRoute {
+		if first.Lat == 0 && first.Lon == 0 {
+			return 0
+		}
+		return geo.DistanceMeters(lon, lat, first.Lon, first.Lat)
+	}
+
+	var targetFrac float64
+	found := false
+	for _, st := range sess.Stops {
+		if st.Frac > frac {
+			targetFrac = st.Frac
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0
+	}
+	delta := targetFrac - frac
+	if delta < 0 {
+		delta = 0
+	}
+	return delta * sess.ShapeLengthM
+}
+
 // Update applique une position GPS.
 func (s *Service) Update(ctx context.Context, sessionID string, lat, lon float64) (*dto.Guidance, error) {
 	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
@@ -191,9 +262,11 @@ func (s *Service) Update(ctx context.Context, sessionID string, lat, lon float64
 	if err != nil {
 		return nil, err
 	}
+	remaining := remainingMeters(sess, frac, offset, s.offRoute, lon, lat)
 	out := Evaluate(Input{
 		Frac: frac, OffsetM: offset, PrevFrac: sess.PrevFrac, Stops: sess.Stops,
 		Now: s.clock.Now(), ServiceMidnight: sess.ServiceMidnight, OffRouteM: s.offRoute,
+		RemainingM: remaining,
 	})
 	if out.State != "ambiguous" {
 		s.mu.Lock()
@@ -202,7 +275,7 @@ func (s *Service) Update(ctx context.Context, sessionID string, lat, lon float64
 	}
 	return &dto.Guidance{
 		Frac: out.Frac, OffsetM: out.OffsetM, NextStop: out.NextStop,
-		DelayS: out.DelayS, State: out.State,
+		DelayS: out.DelayS, TravelS: out.TravelS, State: out.State,
 	}, nil
 }
 
@@ -225,4 +298,3 @@ func (s *Service) HasActiveTrip(tripID string) bool {
 	}
 	return false
 }
-

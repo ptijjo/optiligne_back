@@ -28,6 +28,7 @@ type outgoing struct {
 	OffsetM  float64 `json:"offset_m"`
 	NextStop string  `json:"next_stop"`
 	DelayS   int     `json:"delay_s"`
+	TravelS  int     `json:"travel_s"`
 	State    string  `json:"state"`
 }
 
@@ -135,7 +136,7 @@ func (h *Hub) serve(c *gin.Context) {
 		}
 		payload, _ := json.Marshal(outgoing{
 			Type: "guidance", Frac: g.Frac, OffsetM: g.OffsetM,
-			NextStop: g.NextStop, DelayS: g.DelayS, State: g.State,
+			NextStop: g.NextStop, DelayS: g.DelayS, TravelS: g.TravelS, State: g.State,
 		})
 		_ = Enqueue(out, payload)
 	}

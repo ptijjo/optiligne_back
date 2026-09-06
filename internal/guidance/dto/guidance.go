@@ -8,6 +8,7 @@ type Guidance struct {
 	OffsetM  float64 `json:"offset_m"`
 	NextStop string  `json:"next_stop"`
 	DelayS   int     `json:"delay_s"`
+	TravelS  int     `json:"travel_s"`
 	State    string  `json:"state"`
 }
 
