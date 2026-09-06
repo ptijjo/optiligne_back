@@ -21,6 +21,7 @@ func NewHandler(svc *Service) *Handler {
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/guidance/sessions", h.start)
+	r.DELETE("/guidance/sessions/:id", h.end)
 }
 
 func (h *Handler) start(c *gin.Context) {
@@ -36,6 +37,16 @@ func (h *Handler) start(c *gin.Context) {
 		return
 	}
 	response.OK(c, out)
+}
+
+func (h *Handler) end(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		response.Error(c, http.StatusBadRequest, "invalid_position", "Session obligatoire.")
+		return
+	}
+	h.svc.End(id)
+	response.OK(c, gin.H{"ended": true})
 }
 
 func writeErr(c *gin.Context, err error) {

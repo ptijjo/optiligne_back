@@ -13,6 +13,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// SessionIdleTTL : sans position / WS, la session ne bloque plus l’admin.
+const SessionIdleTTL = 10 * time.Minute
+
 // Session est une session de guidage en mémoire.
 type Session struct {
 	ID              string
@@ -23,6 +26,7 @@ type Session struct {
 	ServiceMidnight time.Time
 	Stops           []StopProg
 	ShapeLengthM    float64
+	LastSeen        time.Time
 }
 
 // Service orchestre périmètre + snap + Evaluate.
@@ -92,6 +96,7 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 	stops := s.buildStopProg(ctx, row.FeedVersionID, tripID, mapStops)
 	shapeLen := geo.ShapeLengthM(ctx, s.db, row.FeedVersionID, row.ShapeID)
 
+	now := s.clock.Now()
 	sess := &Session{
 		ID:              id.New(),
 		TripID:          tripID,
@@ -100,6 +105,7 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 		ServiceMidnight: time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location()),
 		Stops:           stops,
 		ShapeLengthM:    shapeLen,
+		LastSeen:        now,
 	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
@@ -253,6 +259,7 @@ func (s *Service) Update(ctx context.Context, sessionID string, lat, lon float64
 		return nil, ErrInvalidPosition
 	}
 	s.mu.Lock()
+	s.pruneLocked(s.clock.Now())
 	sess := s.sessions[sessionID]
 	s.mu.Unlock()
 	if sess == nil {
@@ -263,26 +270,39 @@ func (s *Service) Update(ctx context.Context, sessionID string, lat, lon float64
 		return nil, err
 	}
 	remaining := remainingMeters(sess, frac, offset, s.offRoute, lon, lat)
+	now := s.clock.Now()
 	out := Evaluate(Input{
 		Frac: frac, OffsetM: offset, PrevFrac: sess.PrevFrac, Stops: sess.Stops,
-		Now: s.clock.Now(), ServiceMidnight: sess.ServiceMidnight, OffRouteM: s.offRoute,
+		Now: now, ServiceMidnight: sess.ServiceMidnight, OffRouteM: s.offRoute,
 		RemainingM: remaining,
 	})
+	s.mu.Lock()
+	sess.LastSeen = now
 	if out.State != "ambiguous" {
-		s.mu.Lock()
 		sess.PrevFrac = out.Frac
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	return &dto.Guidance{
 		Frac: out.Frac, OffsetM: out.OffsetM, NextStop: out.NextStop,
 		DelayS: out.DelayS, TravelS: out.TravelS, State: out.State,
 	}, nil
 }
 
+// End termine une session (quitter le guidage / déconnexion WS).
+func (s *Service) End(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, sessionID)
+}
+
 // SessionExists indique si la session est connue.
 func (s *Service) SessionExists(sessionID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked(s.clock.Now())
 	_, ok := s.sessions[sessionID]
 	return ok
 }
@@ -291,10 +311,26 @@ func (s *Service) SessionExists(sessionID string) bool {
 func (s *Service) HasActiveTrip(tripID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked(s.clock.Now())
 	for _, sess := range s.sessions {
 		if sess.TripID == tripID {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Service) pruneLocked(now time.Time) {
+	for id, sess := range s.sessions {
+		if now.Sub(sess.LastSeen) > SessionIdleTTL {
+			delete(s.sessions, id)
+		}
+	}
+}
+
+// PutSessionForTest injecte une session (tests uniquement).
+func (s *Service) PutSessionForTest(sess *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[sess.ID] = sess
 }

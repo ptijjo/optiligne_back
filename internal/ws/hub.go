@@ -108,6 +108,8 @@ func (h *Hub) serve(c *gin.Context) {
 		close(out)
 		wg.Wait()
 		_ = conn.Close()
+		// Quitter le mobile / coupure réseau → libérer le verrou admin.
+		h.svc.End(sessionID)
 	}()
 
 	var lastTS int64
