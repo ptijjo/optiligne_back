@@ -42,6 +42,15 @@ func TestDepotCodes_RGE(t *testing.T) {
 	}
 }
 
+func TestPrimaryDepot(t *testing.T) {
+	if got := scope.PrimaryDepot("rge"); got != "fluo57" {
+		t.Fatalf("rge = %q", got)
+	}
+	if got := scope.PrimaryDepot("casas"); got != "transavold" {
+		t.Fatalf("casas = %q", got)
+	}
+}
+
 func TestDepotCodes_HombourgHaut(t *testing.T) {
 	got := scope.DepotCodes("hombourg-haut")
 	if len(got) != 1 || got[0] != "hombourg-haut" {

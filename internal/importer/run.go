@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/ptijjo/optiligne_back/config"
 	"github.com/ptijjo/optiligne_back/internal/database"
@@ -17,6 +18,8 @@ import (
 	"github.com/ptijjo/optiligne_back/pkg/id"
 	"gorm.io/gorm"
 )
+
+const defaultOperatorCode = "transavold"
 
 // Run charge la config, connecte la DB et importe GTFS + périmètres.
 func Run() error {
@@ -41,7 +44,7 @@ func Run() error {
 
 // shouldSkipMissingGTFS : pas de fichiers dans l'image, mais un feed déjà en base (prod).
 func shouldSkipMissingGTFS(gtfsDir string, hasActiveFeed bool) (bool, error) {
-	if gtfs.DirComplete(gtfsDir) {
+	if gtfs.HasImportableGTFS(gtfsDir) {
 		return false, nil
 	}
 	if hasActiveFeed {
@@ -50,9 +53,14 @@ func shouldSkipMissingGTFS(gtfsDir string, hasActiveFeed bool) (bool, error) {
 	return false, fmt.Errorf("gtfs: dossier incomplet (%s) et aucun feed actif en base — définir GTFS_DATA_DIR (volume)", gtfsDir)
 }
 
-// Import parse le feed et les affectations, persist en base.
+type parsedSource struct {
+	src  gtfs.Source
+	feed *gtfs.Feed
+}
+
+// Import parse le feed (plat ou multi-secteurs) et les affectations, persist en base.
 func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, error) {
-	// 0. Feed déjà en Postgres, fichiers absents de l'image → démarrer l'API.
+	// 0. Feed déjà en Postgres, fichiers absents → démarrer l'API.
 	var active models.FeedVersion
 	activeErr := db.WithContext(ctx).Where("active = ?", true).First(&active).Error
 	if activeErr != nil && !errors.Is(activeErr, gorm.ErrRecordNotFound) {
@@ -64,7 +72,7 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 	}
 	if skip {
 		log.Printf("GTFS absent de l'image, conservation du feed %s déjà en base", active.FeedVersion)
-		if err := attachUnlistedFromDB(ctx, db, active.ID, "transavold", "fluo57"); err != nil {
+		if err := attachUnlistedFromDB(ctx, db, active.ID, defaultOperatorCode, "fluo57"); err != nil {
 			return 0, err
 		}
 		var n int64
@@ -74,47 +82,82 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 		return int(n), nil
 	}
 
-	// 1. Parser le feed sans charger shapes.txt en mémoire.
-	feed, err := gtfs.ParseDirWithoutShapes(gtfsDir)
+	sources, err := gtfs.DiscoverSources(gtfsDir)
 	if err != nil {
 		return 0, err
 	}
-	if n := len(feed.Anomalies); n > 0 {
-		shown := n
-		if shown > 20 {
-			shown = 20
+	if len(sources) == 0 {
+		return 0, fmt.Errorf("gtfs: aucun feed importable dans %s", gtfsDir)
+	}
+
+	// 1. Parser chaque source (sans shapes en mémoire) + préfixe secteur.
+	parsed := make([]parsedSource, 0, len(sources))
+	feeds := make([]*gtfs.Feed, 0, len(sources))
+	var checksumParts []string
+	for _, src := range sources {
+		feed, err := gtfs.ParseDirWithoutShapes(src.Dir)
+		if err != nil {
+			return 0, fmt.Errorf("gtfs %s: %w", src.Sector, err)
 		}
-		log.Printf("%d anomalie(s) GTFS (flag, pas de correction): %v", n, feed.Anomalies[:shown])
+		if n := len(feed.Anomalies); n > 0 {
+			shown := n
+			if shown > 10 {
+				shown = 10
+			}
+			log.Printf("%s: %d anomalie(s) GTFS: %v", labelSource(src), n, feed.Anomalies[:shown])
+		}
+		gtfs.PrefixFeed(src.Sector, feed)
+		parsed = append(parsed, parsedSource{src: src, feed: feed})
+		feeds = append(feeds, feed)
+		checksumParts = append(checksumParts, src.Sector+"|"+feed.Version+"|"+feed.StartDate+"|"+feed.EndDate)
 	}
-	// 2. Charger le périmètre déclaré (échec si ligne inconnue).
-	perim, err := scope.Load(perimDir, feed.Routes)
-	if err != nil {
-		return 0, err
+	merged := gtfs.MergeFeeds(feeds)
+
+	// 2. Périmètre : multi-secteurs = auto-affectation par dossier ; plat = CSV strict.
+	var perim *scope.Perimeter
+	multi := len(sources) > 1 || sources[0].Sector != ""
+	if multi {
+		perim, err = scope.LoadBase(perimDir)
+		if err != nil {
+			return 0, err
+		}
+		if err := scope.LoadAssignmentsSoft(perim, perimDir, merged.Routes); err != nil {
+			return 0, err
+		}
+		for _, ps := range parsed {
+			depot := scope.PrimaryDepot(ps.src.Sector)
+			if depot == "" {
+				depot = ps.src.Sector
+			}
+			scope.AssignUnlistedRoutes(perim, ps.feed.Routes, defaultOperatorCode, depot)
+		}
+	} else {
+		perim, err = scope.Load(perimDir, merged.Routes)
+		if err != nil {
+			return 0, err
+		}
+		scope.AssignUnlistedRoutes(perim, merged.Routes, defaultOperatorCode, "fluo57")
 	}
-	// 2b. Lignes GTFS hors liste Transdev → secteur RGE (visibles / éditables).
-	scope.AssignUnlistedRoutes(perim, feed.Routes, "transavold", "fluo57")
-	// 3. Checksum de version : même feed = no-op (on rattache quand même les lignes manquantes).
-	sum := sha256.Sum256([]byte(feed.Version + "|" + feed.StartDate + "|" + feed.EndDate))
+
+	// 3. Checksum de version : même ensemble = no-op (on rattache quand même).
+	sum := sha256.Sum256([]byte(strings.Join(checksumParts, ";")))
 	checksum := hex.EncodeToString(sum[:])
 
 	var existing models.FeedVersion
 	err = db.WithContext(ctx).Where("checksum = ?", checksum).First(&existing).Error
 	if err == nil {
-		log.Printf("feed %s déjà importé, no-op", feed.Version)
+		log.Printf("feed déjà importé, no-op (%s)", merged.Version)
 		if err := attachMissingAssignments(ctx, db, existing.ID, perim); err != nil {
 			return 0, err
 		}
-		needed := assignedShapeIDs(feed.Trips, perim)
-		if err := persistMissingShapes(db, existing.ID, filepath.Join(gtfsDir, "shapes.txt"), needed); err != nil {
+		if err := persistMissingShapesMulti(db, existing.ID, parsed, perim); err != nil {
 			return 0, err
 		}
-		return len(feed.Routes), nil
+		return len(merged.Routes), nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, err
 	}
-
-	neededShapes := assignedShapeIDs(feed.Trips, perim)
 
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 4. Désactiver l'ancien feed, créer la nouvelle version.
@@ -122,19 +165,22 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 			return err
 		}
 		fv := models.FeedVersion{
-			ID: id.New(), Checksum: checksum, Publisher: feed.Publisher,
-			FeedVersion: feed.Version, StartDate: feed.StartDate, EndDate: feed.EndDate, Active: true,
+			ID: id.New(), Checksum: checksum, Publisher: merged.Publisher,
+			FeedVersion: trimVersion(merged.Version), StartDate: merged.StartDate, EndDate: merged.EndDate, Active: true,
 		}
 		if err := tx.Create(&fv).Error; err != nil {
 			return err
 		}
 		// 5. Persister tables GTFS (hors shapes).
-		if err := persistFeed(tx, fv.ID, feed); err != nil {
+		if err := persistFeed(tx, fv.ID, merged); err != nil {
 			return err
 		}
-		// 6. Streamer shapes.txt : uniquement les tracés des lignes affectées.
-		if err := persistShapes(tx, fv.ID, filepath.Join(gtfsDir, "shapes.txt"), neededShapes); err != nil {
-			return err
+		// 6. Streamer shapes.txt de chaque source (IDs préfixés).
+		needed := assignedShapeIDs(merged.Trips, perim)
+		for _, ps := range parsed {
+			if err := persistShapesPrefixed(tx, fv.ID, ps.src.Sector, filepath.Join(ps.src.Dir, "shapes.txt"), needed); err != nil {
+				return err
+			}
 		}
 		// 7. Persister opérateurs / dépôts / affectations.
 		if err := persistPerimeter(tx, fv.ID, perim); err != nil {
@@ -146,7 +192,88 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	return len(feed.Routes), nil
+	return len(merged.Routes), nil
+}
+
+func labelSource(src gtfs.Source) string {
+	if src.Sector == "" {
+		return "gtfs"
+	}
+	return src.Sector
+}
+
+func trimVersion(v string) string {
+	if len(v) <= 64 {
+		return v
+	}
+	return v[:64]
+}
+
+func persistShapesPrefixed(tx *gorm.DB, feedID, sector, shapesPath string, wantedPrefixed map[string]struct{}) error {
+	wanted := stripWantedPrefix(sector, wantedPrefixed)
+	if wantedPrefixed != nil && len(wanted) == 0 {
+		return nil
+	}
+	return gtfs.StreamShapes(shapesPath, wanted, func(shapeID string, pts []gtfs.ShapePoint) error {
+		idPref := gtfs.PrefixID(sector, shapeID)
+		sh := models.Shape{ID: id.New(), FeedVersionID: feedID, ShapeID: idPref}
+		if err := tx.Create(&sh).Error; err != nil {
+			return err
+		}
+		wkt := gtfs.LineStringWKT(pts)
+		return tx.Exec(`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE id = ?`, wkt, sh.ID).Error
+	})
+}
+
+func persistMissingShapesMulti(db *gorm.DB, feedID string, parsed []parsedSource, perim *scope.Perimeter) error {
+	var trips []gtfs.Trip
+	for _, ps := range parsed {
+		trips = append(trips, ps.feed.Trips...)
+	}
+	needed := assignedShapeIDs(trips, perim)
+	for _, ps := range parsed {
+		wanted := stripWantedPrefix(ps.src.Sector, needed)
+		if len(wanted) == 0 {
+			continue
+		}
+		err := gtfs.StreamShapes(filepath.Join(ps.src.Dir, "shapes.txt"), wanted, func(shapeID string, pts []gtfs.ShapePoint) error {
+			idPref := gtfs.PrefixID(ps.src.Sector, shapeID)
+			var n int64
+			if err := db.Model(&models.Shape{}).Where("feed_version_id = ? AND shape_id = ?", feedID, idPref).Count(&n).Error; err != nil {
+				return err
+			}
+			if n > 0 {
+				return nil
+			}
+			sh := models.Shape{ID: id.New(), FeedVersionID: feedID, ShapeID: idPref}
+			if err := db.Create(&sh).Error; err != nil {
+				return err
+			}
+			wkt := gtfs.LineStringWKT(pts)
+			return db.Exec(`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE id = ?`, wkt, sh.ID).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stripWantedPrefix(sector string, wantedPrefixed map[string]struct{}) map[string]struct{} {
+	if wantedPrefixed == nil {
+		return nil
+	}
+	if sector == "" {
+		return wantedPrefixed
+	}
+	p := sector + ":"
+	out := make(map[string]struct{})
+	for id := range wantedPrefixed {
+		if strings.HasPrefix(id, p) {
+			out[strings.TrimPrefix(id, p)] = struct{}{}
+		}
+	}
+	return out
 }
 
 func assignedShapeIDs(trips []gtfs.Trip, perim *scope.Perimeter) map[string]struct{} {
@@ -241,35 +368,6 @@ func modelStops(feedID string, in []gtfs.Stop) []models.Stop {
 		})
 	}
 	return out
-}
-
-func persistShapes(tx *gorm.DB, feedID, shapesPath string, wanted map[string]struct{}) error {
-	return gtfs.StreamShapes(shapesPath, wanted, func(shapeID string, pts []gtfs.ShapePoint) error {
-		sh := models.Shape{ID: id.New(), FeedVersionID: feedID, ShapeID: shapeID}
-		if err := tx.Create(&sh).Error; err != nil {
-			return err
-		}
-		wkt := gtfs.LineStringWKT(pts)
-		return tx.Exec(`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE id = ?`, wkt, sh.ID).Error
-	})
-}
-
-func persistMissingShapes(db *gorm.DB, feedID, shapesPath string, wanted map[string]struct{}) error {
-	return gtfs.StreamShapes(shapesPath, wanted, func(shapeID string, pts []gtfs.ShapePoint) error {
-		var n int64
-		if err := db.Model(&models.Shape{}).Where("feed_version_id = ? AND shape_id = ?", feedID, shapeID).Count(&n).Error; err != nil {
-			return err
-		}
-		if n > 0 {
-			return nil
-		}
-		sh := models.Shape{ID: id.New(), FeedVersionID: feedID, ShapeID: shapeID}
-		if err := db.Create(&sh).Error; err != nil {
-			return err
-		}
-		wkt := gtfs.LineStringWKT(pts)
-		return db.Exec(`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE id = ?`, wkt, sh.ID).Error
-	})
 }
 
 func attachMissingAssignments(ctx context.Context, db *gorm.DB, feedID string, p *scope.Perimeter) error {

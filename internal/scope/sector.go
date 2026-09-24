@@ -1,16 +1,19 @@
 package scope
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ptijjo/optiligne_back/internal/gtfs"
 )
 
 const (
-	SectorRGE         = "rge"
-	SectorCASAS       = "casas"
-	SectorCASC        = "casc"
-	SectorForbus      = "forbus"
+	SectorRGE          = "rge"
+	SectorCASAS        = "casas"
+	SectorCASC         = "casc"
+	SectorForbus       = "forbus"
 	SectorHombourgHaut = "hombourg-haut"
 )
 
@@ -53,7 +56,61 @@ func DepotCodes(sectorOrDepot string) []string {
 	}
 }
 
-// AssignUnlistedRoutes rattache au dépôt RGE toute ligne GTFS sans affectation explicite.
+// PrimaryDepot retourne le dépôt d'affectation auto pour un secteur.
+func PrimaryDepot(sectorOrDepot string) string {
+	codes := DepotCodes(sectorOrDepot)
+	if len(codes) == 0 {
+		return ""
+	}
+	return codes[0]
+}
+
+// LoadBase lit opérateurs + dépôts sans affectations (import multi-secteurs).
+func LoadBase(dir string) (*Perimeter, error) {
+	ops, err := readOperators(filepath.Join(dir, "operators.csv"))
+	if err != nil {
+		return nil, err
+	}
+	deps, err := readDepots(filepath.Join(dir, "depots.csv"))
+	if err != nil {
+		return nil, err
+	}
+	return &Perimeter{Operators: ops, Depots: deps}, nil
+}
+
+// LoadAssignmentsSoft résout assignments.csv et ignore les lignes absentes du GTFS.
+func LoadAssignmentsSoft(p *Perimeter, dir string, routes []gtfs.Route) error {
+	if p == nil {
+		return nil
+	}
+	raw, err := readAssignments(filepath.Join(dir, "assignments.csv"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	index := routeIndex(routes)
+	seen := make(map[string]struct{}, len(p.Assigns))
+	for _, a := range p.Assigns {
+		seen[a.RouteID] = struct{}{}
+	}
+	for _, a := range raw {
+		id, ok := index[normalize(a.Ligne)]
+		if !ok {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		a.RouteID = id
+		p.Assigns = append(p.Assigns, a)
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// AssignUnlistedRoutes rattache au dépôt indiqué toute ligne GTFS sans affectation explicite.
 func AssignUnlistedRoutes(p *Perimeter, routes []gtfs.Route, operatorCode, depotCode string) {
 	if p == nil || operatorCode == "" || depotCode == "" {
 		return

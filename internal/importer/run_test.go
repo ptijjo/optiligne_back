@@ -47,6 +47,9 @@ func TestShouldSkipMissingGTFS(t *testing.T) {
 	empty := t.TempDir()
 	_, file, _, _ := runtime.Caller(0)
 	complete := filepath.Join(filepath.Dir(file), "..", "..", "test", "fixtures", "gtfs")
+	nested := t.TempDir()
+	copyTree(t, complete, filepath.Join(nested, "rge"))
+	copyTree(t, complete, filepath.Join(nested, "casas"))
 
 	tests := []struct {
 		name     string
@@ -56,6 +59,7 @@ func TestShouldSkipMissingGTFS(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "dossier complet", dir: complete, hasFeed: false, wantSkip: false},
+		{name: "sous-dossiers secteur", dir: nested, hasFeed: false, wantSkip: false},
 		{name: "vide mais feed en base", dir: empty, hasFeed: true, wantSkip: true},
 		{name: "vide sans feed", dir: empty, hasFeed: false, wantErr: true},
 	}
@@ -75,6 +79,26 @@ func TestShouldSkipMissingGTFS(t *testing.T) {
 				t.Fatalf("skip = %v, want %v", skip, tt.wantSkip)
 			}
 		})
+	}
+}
+
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(src, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, e.Name()), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

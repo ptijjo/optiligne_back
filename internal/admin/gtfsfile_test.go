@@ -10,6 +10,29 @@ import (
 	"github.com/ptijjo/optiligne_back/internal/gtfs"
 )
 
+func TestGTFSFiles_PatchRouteType_SousDossierSecteur(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "casas")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "route_id,agency_id,route_short_name,route_long_name,route_type\nR1,AG1,L1,CASAS,,3\n"
+	if err := os.WriteFile(filepath.Join(dir, "routes.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := admin.NewGTFSFiles(root)
+	if err := files.PatchRouteType("casas:R1", 712); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "routes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), ",712") {
+		t.Fatalf("routes.txt = %s", raw)
+	}
+}
+
 func TestGTFSFiles_PatchRouteType(t *testing.T) {
 	dir := t.TempDir()
 	body := "route_id,agency_id,route_short_name,route_long_name,route_desc,route_type\nR1,AG1,57SAV34,ADELANGE / ST-AVOLD,,713\nR2,AG1,57R004,CREUTZWALD / METZ,,204\n"

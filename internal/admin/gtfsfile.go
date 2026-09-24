@@ -57,12 +57,22 @@ func NewGTFSFiles(dir string) *GTFSFiles {
 	return &GTFSFiles{Dir: dir}
 }
 
+// resolve pointe vers GTFS/<secteur>/fichier.txt si l’id est préfixé (import multi-feeds).
+func (f *GTFSFiles) resolve(entityID, filename string) (path, rawID string) {
+	sector, raw := gtfs.StripSectorPrefix(entityID)
+	if sector != "" {
+		return filepath.Join(f.Dir, sector, filename), raw
+	}
+	return filepath.Join(f.Dir, filename), entityID
+}
+
 func (f *GTFSFiles) PatchStop(stopID string, lat, lng float64) error {
-	return rewriteCSV(filepath.Join(f.Dir, "stops.txt"), func(header, row []string) []string {
+	path, raw := f.resolve(stopID, "stops.txt")
+	return rewriteCSV(path, func(header, row []string) []string {
 		if col(header, row, "stop_id") == "" {
 			return nil
 		}
-		if col(header, row, "stop_id") != stopID {
+		if col(header, row, "stop_id") != raw {
 			return row
 		}
 		out := append([]string(nil), row...)
@@ -73,8 +83,9 @@ func (f *GTFSFiles) PatchStop(stopID string, lat, lng float64) error {
 }
 
 func (f *GTFSFiles) PatchRouteType(routeID string, routeType int) error {
-	return rewriteCSV(filepath.Join(f.Dir, "routes.txt"), func(header, row []string) []string {
-		if col(header, row, "route_id") != routeID {
+	path, raw := f.resolve(routeID, "routes.txt")
+	return rewriteCSV(path, func(header, row []string) []string {
+		if col(header, row, "route_id") != raw {
 			return row
 		}
 		out := append([]string(nil), row...)
@@ -84,11 +95,12 @@ func (f *GTFSFiles) PatchRouteType(routeID string, routeType int) error {
 }
 
 func (f *GTFSFiles) UpsertRoute(routeID, agencyID, shortName, longName string, routeType int) error {
-	path := filepath.Join(f.Dir, "routes.txt")
-	return upsertCSVRow(path, "route_id", routeID, func(header []string, row []string) {
-		setCol(header, row, "route_id", routeID)
+	path, rawRoute := f.resolve(routeID, "routes.txt")
+	_, rawAgency := f.resolve(agencyID, "routes.txt")
+	return upsertCSVRow(path, "route_id", rawRoute, func(header []string, row []string) {
+		setCol(header, row, "route_id", rawRoute)
 		if agencyID != "" {
-			setCol(header, row, "agency_id", agencyID)
+			setCol(header, row, "agency_id", rawAgency)
 		}
 		setCol(header, row, "route_short_name", shortName)
 		setCol(header, row, "route_long_name", longName)
@@ -97,20 +109,23 @@ func (f *GTFSFiles) UpsertRoute(routeID, agencyID, shortName, longName string, r
 }
 
 func (f *GTFSFiles) UpsertTrip(tripID, routeID, serviceID, shapeID, headsign string) error {
-	path := filepath.Join(f.Dir, "trips.txt")
-	return upsertCSVRow(path, "trip_id", tripID, func(header []string, row []string) {
-		setCol(header, row, "trip_id", tripID)
-		setCol(header, row, "route_id", routeID)
-		setCol(header, row, "service_id", serviceID)
-		setCol(header, row, "shape_id", shapeID)
+	path, rawTrip := f.resolve(tripID, "trips.txt")
+	_, rawRoute := f.resolve(routeID, "trips.txt")
+	_, rawService := f.resolve(serviceID, "trips.txt")
+	_, rawShape := f.resolve(shapeID, "trips.txt")
+	return upsertCSVRow(path, "trip_id", rawTrip, func(header []string, row []string) {
+		setCol(header, row, "trip_id", rawTrip)
+		setCol(header, row, "route_id", rawRoute)
+		setCol(header, row, "service_id", rawService)
+		setCol(header, row, "shape_id", rawShape)
 		setCol(header, row, "trip_headsign", headsign)
 	})
 }
 
 func (f *GTFSFiles) UpsertCalendar(cal CalendarFileRow) error {
-	path := filepath.Join(f.Dir, "calendar.txt")
-	return upsertCSVRow(path, "service_id", cal.ServiceID, func(header []string, row []string) {
-		setCol(header, row, "service_id", cal.ServiceID)
+	path, rawService := f.resolve(cal.ServiceID, "calendar.txt")
+	return upsertCSVRow(path, "service_id", rawService, func(header []string, row []string) {
+		setCol(header, row, "service_id", rawService)
 		setCol(header, row, "monday", bool01(cal.Monday))
 		setCol(header, row, "tuesday", bool01(cal.Tuesday))
 		setCol(header, row, "wednesday", bool01(cal.Wednesday))
@@ -214,7 +229,7 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 	if stopID == "" {
 		return ErrInvalidCoords
 	}
-	path := filepath.Join(f.Dir, "stops.txt")
+	path, raw := f.resolve(stopID, "stops.txt")
 	in, err := os.Open(path)
 	if err != nil {
 		return err
@@ -253,11 +268,11 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 		if existingID == "" {
 			continue
 		}
-		if existingID == stopID {
+		if existingID == raw {
 			found = true
 			out := make([]string, len(header))
 			copy(out, row)
-			if err := fillStopRow(header, out, stopID, name, lat, lng); err != nil {
+			if err := fillStopRow(header, out, raw, name, lat, lng); err != nil {
 				tmp.Close()
 				os.Remove(tmp.Name())
 				return err
@@ -277,7 +292,7 @@ func (f *GTFSFiles) UpsertStop(stopID, name string, lat, lng float64) error {
 	}
 	if !found {
 		nr := make([]string, len(header))
-		if err := fillStopRow(header, nr, stopID, name, lat, lng); err != nil {
+		if err := fillStopRow(header, nr, raw, name, lat, lng); err != nil {
 			tmp.Close()
 			os.Remove(tmp.Name())
 			return err
@@ -312,17 +327,25 @@ func (f *GTFSFiles) ReplaceShapes(shapeIDs []string, pts []gtfs.ShapePoint) erro
 		return ErrShapeTooShort
 	}
 	want := make(map[string]struct{}, len(shapeIDs))
+	var path string
 	for _, id := range shapeIDs {
 		id = strings.TrimSpace(id)
-		if id != "" {
-			want[id] = struct{}{}
+		if id == "" {
+			continue
 		}
+		p, raw := f.resolve(id, "shapes.txt")
+		if path == "" {
+			path = p
+		}
+		want[raw] = struct{}{}
 	}
 	if len(want) == 0 {
 		return nil
 	}
+	if path == "" {
+		path = filepath.Join(f.Dir, "shapes.txt")
+	}
 
-	path := filepath.Join(f.Dir, "shapes.txt")
 	in, err := os.Open(path)
 	if err != nil {
 		return err
@@ -403,23 +426,36 @@ func (f *GTFSFiles) ReplaceShapes(shapeIDs []string, pts []gtfs.ShapePoint) erro
 // ReplaceStopTimes réécrit stop_times.txt en une passe : remplace les lignes des trip_id listés.
 func (f *GTFSFiles) ReplaceStopTimes(tripIDs []string, rows []StopTimeFileRow) error {
 	want := make(map[string]struct{}, len(tripIDs))
+	var path string
 	for _, id := range tripIDs {
 		id = strings.TrimSpace(id)
-		if id != "" {
-			want[id] = struct{}{}
+		if id == "" {
+			continue
 		}
+		p, raw := f.resolve(id, "stop_times.txt")
+		if path == "" {
+			path = p
+		}
+		want[raw] = struct{}{}
 	}
 	if len(want) == 0 {
 		return nil
 	}
+	if path == "" {
+		path = filepath.Join(f.Dir, "stop_times.txt")
+	}
 	byTrip := make(map[string][]StopTimeFileRow, len(want))
 	for _, row := range rows {
-		if _, ok := want[row.TripID]; ok {
-			byTrip[row.TripID] = append(byTrip[row.TripID], row)
+		_, rawTrip := f.resolve(row.TripID, "stop_times.txt")
+		_, rawStop := f.resolve(row.StopID, "stop_times.txt")
+		if _, ok := want[rawTrip]; ok {
+			byTrip[rawTrip] = append(byTrip[rawTrip], StopTimeFileRow{
+				TripID: rawTrip, StopID: rawStop,
+				StopSequence: row.StopSequence, ArrivalSec: row.ArrivalSec, DepartureSec: row.DepartureSec,
+			})
 		}
 	}
 
-	path := filepath.Join(f.Dir, "stop_times.txt")
 	in, err := os.Open(path)
 	if err != nil {
 		return err
