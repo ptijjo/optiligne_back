@@ -26,12 +26,9 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 }
 
 func (h *Handler) listRoutes(c *gin.Context) {
-	// 1. Lire le périmètre (téléphone provisionné).
+	// 1. Lire le secteur (rge/casas/casc/forbus) ou le dépôt provisionné.
 	op := c.Query("operator_code")
-	depot := c.Query("depot_code")
-	if depot == "" {
-		depot = c.Query("depot_id")
-	}
+	depot := catalogDepot(c)
 	routes, err := h.svc.ListRoutes(c.Request.Context(), op, depot)
 	if err != nil {
 		writeErr(c, err)
@@ -45,10 +42,7 @@ func (h *Handler) listRoutes(c *gin.Context) {
 
 func (h *Handler) listTrips(c *gin.Context) {
 	op := c.Query("operator_code")
-	depot := c.Query("depot_code")
-	if depot == "" {
-		depot = c.Query("depot_id")
-	}
+	depot := catalogDepot(c)
 	trips, err := h.svc.ListTrips(c.Request.Context(), op, depot, c.Param("id"), c.Query("date"))
 	if err != nil {
 		writeErr(c, err)
@@ -58,19 +52,25 @@ func (h *Handler) listTrips(c *gin.Context) {
 }
 
 func (h *Handler) listTripStops(c *gin.Context) {
-	// 1. Lire le périmètre (téléphone provisionné).
 	op := c.Query("operator_code")
-	depot := c.Query("depot_code")
-	if depot == "" {
-		depot = c.Query("depot_id")
-	}
-	// 2. Arrêts de la course dans l'ordre de passage.
+	depot := catalogDepot(c)
 	stops, err := h.svc.ListTripStops(c.Request.Context(), op, depot, c.Param("tripId"))
 	if err != nil {
 		writeErr(c, err)
 		return
 	}
 	response.OK(c, stops)
+}
+
+func catalogDepot(c *gin.Context) string {
+	if s := c.Query("sector"); s != "" {
+		return s
+	}
+	depot := c.Query("depot_code")
+	if depot == "" {
+		depot = c.Query("depot_id")
+	}
+	return depot
 }
 
 func writeErr(c *gin.Context, err error) {

@@ -15,22 +15,36 @@ type fakeStore struct {
 	err    error
 }
 
-func (f fakeStore) SchoolRoutes(ctx context.Context, operatorCode, depotCode string) ([]dto.Route, error) {
-	if operatorCode != "transavold" || depotCode != "fluo57" {
+func (f fakeStore) SchoolRoutes(_ context.Context, operatorCode string, depotCodes []string) ([]dto.Route, error) {
+	if operatorCode != "transavold" {
 		return nil, nil
 	}
-	return f.routes, nil
-}
-
-func (f fakeStore) TripsOnDate(ctx context.Context, operatorCode, depotCode, routeID string, day time.Time) ([]dto.Trip, error) {
+	for _, d := range depotCodes {
+		if d == "fluo57" || d == "transavold" || d == "transchool" {
+			return f.routes, nil
+		}
+	}
 	return nil, nil
 }
 
-func (f fakeStore) TripStops(ctx context.Context, operatorCode, depotCode, tripID string) ([]dto.Stop, error) {
+func (f fakeStore) TripsOnDate(_ context.Context, operatorCode string, depotCodes []string, routeID string, day time.Time) ([]dto.Trip, error) {
+	return nil, nil
+}
+
+func (f fakeStore) TripStops(_ context.Context, operatorCode string, depotCodes []string, tripID string) ([]dto.Stop, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	if operatorCode != "transavold" || depotCode != "fluo57" || tripID == "" {
+	if operatorCode != "transavold" || tripID == "" {
+		return nil, catalog.ErrTripNotFound
+	}
+	ok := false
+	for _, d := range depotCodes {
+		if d == "fluo57" {
+			ok = true
+		}
+	}
+	if !ok {
 		return nil, catalog.ErrTripNotFound
 	}
 	return f.stops, nil
@@ -82,6 +96,32 @@ func TestListRoutes_LockOperatorEnv(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("le lock serveur doit forcer transavold, got %+v", got)
+	}
+}
+
+func TestListRoutes_AliasRGE(t *testing.T) {
+	svc := catalog.NewService(fakeStore{routes: []dto.Route{
+		{ID: "R-ALL", ShortName: "57R099", RouteType: 204},
+	}}, "")
+	got, err := svc.ListRoutes(context.Background(), "transavold", "rge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ShortName != "57R099" {
+		t.Fatalf("rge doit lister toutes les lignes fluo57, got %+v", got)
+	}
+}
+
+func TestListRoutes_Casas(t *testing.T) {
+	svc := catalog.NewService(fakeStore{routes: []dto.Route{
+		{ID: "L1", ShortName: "L1", RouteType: 3},
+	}}, "")
+	got, err := svc.ListRoutes(context.Background(), "transavold", "casas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("casas doit lister transavold+transchool, got %+v", got)
 	}
 }
 

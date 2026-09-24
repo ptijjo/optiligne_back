@@ -64,6 +64,9 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 	}
 	if skip {
 		log.Printf("GTFS absent de l'image, conservation du feed %s déjà en base", active.FeedVersion)
+		if err := attachUnlistedFromDB(ctx, db, active.ID, "transavold", "fluo57"); err != nil {
+			return 0, err
+		}
 		var n int64
 		if err := db.WithContext(ctx).Model(&models.Route{}).Where("feed_version_id = ?", active.ID).Count(&n).Error; err != nil {
 			return 0, err
@@ -88,7 +91,9 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	// 3. Checksum de version : même feed = no-op.
+	// 2b. Lignes GTFS hors liste Transdev → secteur RGE (visibles / éditables).
+	scope.AssignUnlistedRoutes(perim, feed.Routes, "transavold", "fluo57")
+	// 3. Checksum de version : même feed = no-op (on rattache quand même les lignes manquantes).
 	sum := sha256.Sum256([]byte(feed.Version + "|" + feed.StartDate + "|" + feed.EndDate))
 	checksum := hex.EncodeToString(sum[:])
 
@@ -96,6 +101,13 @@ func Import(ctx context.Context, db *gorm.DB, gtfsDir, perimDir string) (int, er
 	err = db.WithContext(ctx).Where("checksum = ?", checksum).First(&existing).Error
 	if err == nil {
 		log.Printf("feed %s déjà importé, no-op", feed.Version)
+		if err := attachMissingAssignments(ctx, db, existing.ID, perim); err != nil {
+			return 0, err
+		}
+		needed := assignedShapeIDs(feed.Trips, perim)
+		if err := persistMissingShapes(db, existing.ID, filepath.Join(gtfsDir, "shapes.txt"), needed); err != nil {
+			return 0, err
+		}
 		return len(feed.Routes), nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -240,6 +252,112 @@ func persistShapes(tx *gorm.DB, feedID, shapesPath string, wanted map[string]str
 		wkt := gtfs.LineStringWKT(pts)
 		return tx.Exec(`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE id = ?`, wkt, sh.ID).Error
 	})
+}
+
+func persistMissingShapes(db *gorm.DB, feedID, shapesPath string, wanted map[string]struct{}) error {
+	return gtfs.StreamShapes(shapesPath, wanted, func(shapeID string, pts []gtfs.ShapePoint) error {
+		var n int64
+		if err := db.Model(&models.Shape{}).Where("feed_version_id = ? AND shape_id = ?", feedID, shapeID).Count(&n).Error; err != nil {
+			return err
+		}
+		if n > 0 {
+			return nil
+		}
+		sh := models.Shape{ID: id.New(), FeedVersionID: feedID, ShapeID: shapeID}
+		if err := db.Create(&sh).Error; err != nil {
+			return err
+		}
+		wkt := gtfs.LineStringWKT(pts)
+		return db.Exec(`UPDATE shapes SET geom = ST_SetSRID(ST_GeomFromText(?), 4326) WHERE id = ?`, wkt, sh.ID).Error
+	})
+}
+
+func attachMissingAssignments(ctx context.Context, db *gorm.DB, feedID string, p *scope.Perimeter) error {
+	opIDs, depIDs, err := resolveOpDepots(db, p)
+	if err != nil {
+		return err
+	}
+	for _, a := range p.Assigns {
+		oid := opIDs[a.OperatorCode]
+		did := depIDs[a.OperatorCode+"|"+a.DepotCode]
+		if oid == "" || did == "" || a.RouteID == "" {
+			continue
+		}
+		var n int64
+		if err := db.WithContext(ctx).Model(&models.RouteAssignment{}).
+			Where("feed_version_id = ? AND route_id = ? AND depot_id = ?", feedID, a.RouteID, did).
+			Count(&n).Error; err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		row := models.RouteAssignment{
+			ID: id.New(), FeedVersionID: feedID,
+			OperatorID: oid, DepotID: did, RouteID: a.RouteID,
+		}
+		if err := db.WithContext(ctx).Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func attachUnlistedFromDB(ctx context.Context, db *gorm.DB, feedID, operatorCode, depotCode string) error {
+	var op models.Operator
+	if err := db.WithContext(ctx).Where("code = ?", operatorCode).First(&op).Error; err != nil {
+		return err
+	}
+	var dep models.Depot
+	if err := db.WithContext(ctx).Where("code = ? AND operator_id = ?", depotCode, op.ID).First(&dep).Error; err != nil {
+		return err
+	}
+	var ids []string
+	if err := db.WithContext(ctx).Raw(`
+		SELECT r.route_id
+		FROM routes r
+		WHERE r.feed_version_id = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM route_assignments a
+		    WHERE a.feed_version_id = r.feed_version_id AND a.route_id = r.route_id
+		  )
+	`, feedID).Scan(&ids).Error; err != nil {
+		return err
+	}
+	for _, rid := range ids {
+		row := models.RouteAssignment{
+			ID: id.New(), FeedVersionID: feedID,
+			OperatorID: op.ID, DepotID: dep.ID, RouteID: rid,
+		}
+		if err := db.WithContext(ctx).Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	if n := len(ids); n > 0 {
+		log.Printf("%d ligne(s) hors liste Transdev rattachées à %s", n, depotCode)
+	}
+	return nil
+}
+
+func resolveOpDepots(db *gorm.DB, p *scope.Perimeter) (map[string]string, map[string]string, error) {
+	opIDs := map[string]string{}
+	for _, o := range p.Operators {
+		var existing models.Operator
+		if err := db.Where("code = ?", o.Code).First(&existing).Error; err != nil {
+			return nil, nil, err
+		}
+		opIDs[o.Code] = existing.ID
+	}
+	depIDs := map[string]string{}
+	for _, d := range p.Depots {
+		oid := opIDs[d.OperatorCode]
+		var existing models.Depot
+		if err := db.Where("code = ? AND operator_id = ?", d.Code, oid).First(&existing).Error; err != nil {
+			return nil, nil, err
+		}
+		depIDs[d.OperatorCode+"|"+d.Code] = existing.ID
+	}
+	return opIDs, depIDs, nil
 }
 
 func persistPerimeter(tx *gorm.DB, feedID string, p *scope.Perimeter) error {

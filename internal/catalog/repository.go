@@ -20,18 +20,21 @@ func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) SchoolRoutes(ctx context.Context, operatorCode, depotCode string) ([]dto.Route, error) {
+func (r *Repository) SchoolRoutes(ctx context.Context, operatorCode string, depotCodes []string) ([]dto.Route, error) {
+	if len(depotCodes) == 0 {
+		return []dto.Route{}, nil
+	}
 	var rows []models.Route
 	err := r.db.WithContext(ctx).Raw(`
-		SELECT r.id, r.route_id, r.short_name, r.long_name, r.route_type
+		SELECT DISTINCT r.id, r.route_id, r.short_name, r.long_name, r.route_type
 		FROM routes r
 		JOIN route_assignments a ON a.route_id = r.route_id AND a.feed_version_id = r.feed_version_id
 		JOIN operators o ON o.id = a.operator_id
 		JOIN depots d ON d.id = a.depot_id
 		JOIN feed_versions fv ON fv.id = r.feed_version_id AND fv.active = true
-		WHERE o.code = ? AND d.code = ?
+		WHERE o.code = ? AND d.code IN ?
 		ORDER BY r.short_name
-	`, operatorCode, depotCode).Scan(&rows).Error
+	`, operatorCode, depotCodes).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +50,10 @@ func (r *Repository) SchoolRoutes(ctx context.Context, operatorCode, depotCode s
 	return out, nil
 }
 
-func (r *Repository) TripsOnDate(ctx context.Context, operatorCode, depotCode, routeID string, day time.Time) ([]dto.Trip, error) {
+func (r *Repository) TripsOnDate(ctx context.Context, operatorCode string, depotCodes []string, routeID string, day time.Time) ([]dto.Trip, error) {
+	if len(depotCodes) == 0 {
+		return nil, ErrRouteNotFound
+	}
 	var routes []models.Route
 	if err := r.db.WithContext(ctx).Raw(`
 		SELECT r.*
@@ -56,8 +62,8 @@ func (r *Repository) TripsOnDate(ctx context.Context, operatorCode, depotCode, r
 		JOIN operators o ON o.id = a.operator_id
 		JOIN depots d ON d.id = a.depot_id
 		JOIN feed_versions fv ON fv.id = r.feed_version_id AND fv.active = true
-		WHERE o.code = ? AND d.code = ? AND r.route_id = ?
-	`, operatorCode, depotCode, routeID).Scan(&routes).Error; err != nil {
+		WHERE o.code = ? AND d.code IN ? AND r.route_id = ?
+	`, operatorCode, depotCodes, routeID).Scan(&routes).Error; err != nil {
 		return nil, err
 	}
 	if len(routes) == 0 {
@@ -101,7 +107,10 @@ func (r *Repository) TripsOnDate(ctx context.Context, operatorCode, depotCode, r
 	return out, nil
 }
 
-func (r *Repository) TripStops(ctx context.Context, operatorCode, depotCode, tripID string) ([]dto.Stop, error) {
+func (r *Repository) TripStops(ctx context.Context, operatorCode string, depotCodes []string, tripID string) ([]dto.Stop, error) {
+	if len(depotCodes) == 0 {
+		return nil, ErrTripNotFound
+	}
 	var scoped int
 	if err := r.db.WithContext(ctx).Raw(`
 		SELECT COUNT(*)
@@ -111,8 +120,8 @@ func (r *Repository) TripStops(ctx context.Context, operatorCode, depotCode, tri
 		JOIN operators o ON o.id = a.operator_id
 		JOIN depots d ON d.id = a.depot_id
 		JOIN feed_versions fv ON fv.id = t.feed_version_id AND fv.active = true
-		WHERE o.code = ? AND d.code = ? AND t.trip_id = ?
-	`, operatorCode, depotCode, tripID).Scan(&scoped).Error; err != nil {
+		WHERE o.code = ? AND d.code IN ? AND t.trip_id = ?
+	`, operatorCode, depotCodes, tripID).Scan(&scoped).Error; err != nil {
 		return nil, err
 	}
 	if scoped == 0 {

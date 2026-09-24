@@ -8,6 +8,7 @@ import (
 	guidancedto "github.com/ptijjo/optiligne_back/internal/guidance/dto"
 	"github.com/ptijjo/optiligne_back/internal/gtfs"
 	"github.com/ptijjo/optiligne_back/internal/models"
+	"github.com/ptijjo/optiligne_back/internal/scope"
 	"github.com/ptijjo/optiligne_back/pkg/id"
 	"gorm.io/gorm"
 )
@@ -99,6 +100,10 @@ func NewRepository(db *gorm.DB) *Repository {
 }
 
 func (r *Repository) LoadDraft(ctx context.Context, operatorCode, depotCode, routeID, tripID string) (*dto.Draft, error) {
+	depots := scope.DepotCodes(depotCode)
+	if len(depots) == 0 {
+		return nil, catalog.ErrScopeRequired
+	}
 	var row draftRow
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT r.route_id, r.short_name, r.long_name, r.route_type, t.trip_id, t.shape_id,
@@ -109,11 +114,11 @@ func (r *Repository) LoadDraft(ctx context.Context, operatorCode, depotCode, rou
 		JOIN depots d ON d.id = a.depot_id
 		JOIN feed_versions fv ON fv.id = r.feed_version_id AND fv.active = true
 		JOIN trips t ON t.route_id = r.route_id AND t.feed_version_id = r.feed_version_id
-		WHERE o.code = ? AND d.code = ? AND r.route_id = ?
+		WHERE o.code = ? AND d.code IN ? AND r.route_id = ?
 		  AND (? = '' OR t.trip_id = ?)
 		ORDER BY t.trip_id
 		LIMIT 1
-	`, operatorCode, depotCode, routeID, tripID, tripID).Scan(&row).Error
+	`, operatorCode, depots, routeID, tripID, tripID).Scan(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +423,7 @@ func (r *Repository) ResolveScope(ctx context.Context, operatorCode, depotCode s
 		CROSS JOIN feed_versions fv
 		WHERE o.code = ? AND d.code = ? AND fv.active = true
 		LIMIT 1
-	`, operatorCode, depotCode).Scan(&row).Error
+	`, operatorCode, primaryDepot(depotCode)).Scan(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -524,4 +529,12 @@ func (r *Repository) CreateRoute(ctx context.Context, in CreateRouteInput) error
 		}
 		return nil
 	})
+}
+
+func primaryDepot(depotCode string) string {
+	codes := scope.DepotCodes(depotCode)
+	if len(codes) == 0 {
+		return depotCode
+	}
+	return codes[0]
 }

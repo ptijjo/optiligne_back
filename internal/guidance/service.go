@@ -9,6 +9,7 @@ import (
 	"github.com/ptijjo/optiligne_back/internal/geo"
 	"github.com/ptijjo/optiligne_back/internal/guidance/dto"
 	"github.com/ptijjo/optiligne_back/internal/models"
+	"github.com/ptijjo/optiligne_back/internal/scope"
 	"github.com/ptijjo/optiligne_back/pkg/id"
 	"gorm.io/gorm"
 )
@@ -57,6 +58,10 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 	if operatorCode == "" || depotCode == "" || tripID == "" || date == "" {
 		return nil, catalog.ErrScopeRequired
 	}
+	depots := scope.DepotCodes(depotCode)
+	if len(depots) == 0 {
+		return nil, catalog.ErrScopeRequired
+	}
 	day, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		return nil, catalog.ErrTripNotFound
@@ -75,13 +80,13 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 		    JOIN operators o ON o.id = a.operator_id
 		    JOIN depots d ON d.id = a.depot_id
 		    WHERE a.feed_version_id = t.feed_version_id AND a.route_id = t.route_id
-		      AND o.code = ? AND d.code = ?
+		      AND o.code = ? AND d.code IN ?
 		  ) AS in_scope
 		FROM trips t
 		JOIN routes r ON r.route_id = t.route_id AND r.feed_version_id = t.feed_version_id
 		JOIN feed_versions fv ON fv.id = t.feed_version_id AND fv.active = true
 		WHERE t.trip_id = ?
-	`, operatorCode, depotCode, tripID).Scan(&row).Error
+	`, operatorCode, depots, tripID).Scan(&row).Error
 	if err != nil {
 		return nil, err
 	}

@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/ptijjo/optiligne_back/internal/catalog/dto"
+	"github.com/ptijjo/optiligne_back/internal/scope"
 )
 
 // Store charge les données catalogue déjà persistées.
 type Store interface {
-	SchoolRoutes(ctx context.Context, operatorCode, depotCode string) ([]dto.Route, error)
-	TripsOnDate(ctx context.Context, operatorCode, depotCode, routeID string, day time.Time) ([]dto.Trip, error)
-	TripStops(ctx context.Context, operatorCode, depotCode, tripID string) ([]dto.Stop, error)
+	SchoolRoutes(ctx context.Context, operatorCode string, depotCodes []string) ([]dto.Route, error)
+	TripsOnDate(ctx context.Context, operatorCode string, depotCodes []string, routeID string, day time.Time) ([]dto.Trip, error)
+	TripStops(ctx context.Context, operatorCode string, depotCodes []string, tripID string) ([]dto.Stop, error)
 }
 
 // Service liste lignes et courses dans le périmètre.
@@ -34,7 +35,15 @@ func (s *Service) resolveOperator(operatorCode string) (string, error) {
 	return operatorCode, nil
 }
 
-// ListRoutes retourne les lignes du dépôt (régulières, associées, scolaires).
+func (s *Service) depots(depotCode string) ([]string, error) {
+	codes := scope.DepotCodes(depotCode)
+	if len(codes) == 0 {
+		return nil, ErrScopeRequired
+	}
+	return codes, nil
+}
+
+// ListRoutes retourne les lignes du secteur (toutes les lignes affectées, pas seulement Transdev).
 func (s *Service) ListRoutes(ctx context.Context, operatorCode, depotCode string) ([]dto.Route, error) {
 	op, err := s.resolveOperator(operatorCode)
 	if err != nil {
@@ -43,7 +52,11 @@ func (s *Service) ListRoutes(ctx context.Context, operatorCode, depotCode string
 	if depotCode == "" {
 		return nil, ErrScopeRequired
 	}
-	return s.store.SchoolRoutes(ctx, op, depotCode)
+	depots, err := s.depots(depotCode)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.SchoolRoutes(ctx, op, depots)
 }
 
 // ListTrips retourne les courses d'une ligne du périmètre pour une date.
@@ -55,11 +68,15 @@ func (s *Service) ListTrips(ctx context.Context, operatorCode, depotCode, routeI
 	if depotCode == "" || routeID == "" || date == "" {
 		return nil, ErrScopeRequired
 	}
+	depots, err := s.depots(depotCode)
+	if err != nil {
+		return nil, err
+	}
 	day, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		return nil, err
 	}
-	trips, err := s.store.TripsOnDate(ctx, op, depotCode, routeID, day)
+	trips, err := s.store.TripsOnDate(ctx, op, depots, routeID, day)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +95,11 @@ func (s *Service) ListTripStops(ctx context.Context, operatorCode, depotCode, tr
 	if depotCode == "" || tripID == "" {
 		return nil, ErrScopeRequired
 	}
-	stops, err := s.store.TripStops(ctx, op, depotCode, tripID)
+	depots, err := s.depots(depotCode)
+	if err != nil {
+		return nil, err
+	}
+	stops, err := s.store.TripStops(ctx, op, depots, tripID)
 	if err != nil {
 		return nil, err
 	}

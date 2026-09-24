@@ -47,7 +47,7 @@ func (h *Handler) searchStops(c *gin.Context) {
 }
 
 func (h *Handler) draft(c *gin.Context) {
-	op, depot := scope(c)
+	op, depot := requestScope(c)
 	out, err := h.svc.Draft(c.Request.Context(), op, depot, c.Param("routeId"), c.Query("trip_id"))
 	if err != nil {
 		writeAdminErr(c, err)
@@ -140,9 +140,12 @@ func (h *Handler) save(c *gin.Context) {
 	response.OK(c, out)
 }
 
-func scope(c *gin.Context) (string, string) {
+func requestScope(c *gin.Context) (string, string) {
 	op := c.Query("operator_code")
-	depot := c.Query("depot_code")
+	depot := c.Query("sector")
+	if depot == "" {
+		depot = c.Query("depot_code")
+	}
 	if cl, ok := c.Get("auth"); ok {
 		a := cl.(auth.Claims)
 		if op == "" {
