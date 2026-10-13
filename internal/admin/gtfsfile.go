@@ -57,6 +57,15 @@ func NewGTFSFiles(dir string) *GTFSFiles {
 	return &GTFSFiles{Dir: dir}
 }
 
+// DefaultSector renvoie le secteur si le volume n’en a qu’un (rge / casas / …).
+func (f *GTFSFiles) DefaultSector() string {
+	sources, err := gtfs.DiscoverSources(f.Dir)
+	if err != nil || len(sources) != 1 {
+		return ""
+	}
+	return sources[0].Sector
+}
+
 // resolve pointe vers GTFS/<secteur>/fichier.txt si l’id est préfixé (import multi-feeds).
 func (f *GTFSFiles) resolve(entityID, filename string) (path, rawID string) {
 	sector, raw := gtfs.StripSectorPrefix(entityID)

@@ -200,6 +200,7 @@ type fakeFiles struct {
 	stops      int
 	shapes     int
 	upserts    int
+	upsertIDs  []string
 	stopTimes  int
 	routeTypes int
 	routes     int
@@ -219,8 +220,9 @@ func (f *fakeFiles) PatchRouteType(string, int) error {
 	return nil
 }
 
-func (f *fakeFiles) UpsertStop(string, string, float64, float64) error {
+func (f *fakeFiles) UpsertStop(id string, _ string, _ float64, _ float64) error {
 	f.upserts++
+	f.upsertIDs = append(f.upsertIDs, id)
 	return nil
 }
 
@@ -519,6 +521,35 @@ func TestSave_EcritShapeEtStops(t *testing.T) {
 	}
 	if out.FeedVersion != "2026" || out.Message == "" {
 		t.Fatalf("%+v", out)
+	}
+}
+
+func TestSave_PrefixeSecteurNouvelArret(t *testing.T) {
+	draft := sampleDraft()
+	draft.RouteID = "rge:R1"
+	draft.TripID = "rge:T1"
+	draft.ShapeID = "rge:SH1"
+	draft.Stops = []dto.EditorStop{
+		{StopID: "rge:A", Name: "Départ", Sequence: 1, Lat: 49.1, Lng: 6.9},
+		{StopID: "ol-new", Name: "Nouveau", Sequence: 2, Lat: 49.12, Lng: 6.91},
+	}
+	files := &fakeFiles{}
+	store := &fakeStore{draft: draft, siblingTrips: []string{"rge:T1"}}
+	svc := admin.NewService(store, fakeRouter{}, files, nil, "")
+	_, err := svc.Save(context.Background(), "transavold", "fluo57", "rge:R1", dto.SaveRequest{
+		OperatorCode: "transavold", DepotCode: "fluo57", TripID: "rge:T1",
+		Stops: draft.Stops,
+		Shape: guidancedto.LineString{Type: "LineString", Coordinates: [][]float64{{6.9, 49.1}, {6.92, 49.13}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(files.upsertIDs, ",")
+	if !strings.Contains(joined, "rge:ol-new") {
+		t.Fatalf("nouvel arrêt doit cibler GTFS/rge/ via préfixe, got %v", files.upsertIDs)
+	}
+	if !strings.Contains(joined, "rge:A") {
+		t.Fatalf("arrêt existant conservé: %v", files.upsertIDs)
 	}
 }
 

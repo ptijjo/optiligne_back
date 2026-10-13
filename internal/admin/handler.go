@@ -177,6 +177,7 @@ func writeAdminErr(c *gin.Context, err error) {
 	case errors.Is(err, ErrTripActive):
 		response.Error(c, http.StatusConflict, "trip_active", "Une course est guidée en ce moment. Réessayez plus tard.")
 	case errors.Is(err, ErrGTFSFiles):
+		log.Printf("admin gtfs files: %v", err)
 		response.Error(c, http.StatusBadGateway, "gtfs_file_failed",
 			"Modification enregistrée en base, mais la synchronisation des fichiers GTFS a échoué (droits d’écriture ou espace disque sur le volume GTFS).")
 	default:

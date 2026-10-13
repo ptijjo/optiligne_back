@@ -62,7 +62,7 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 	if len(depots) == 0 {
 		return nil, catalog.ErrScopeRequired
 	}
-	day, err := time.Parse("2006-01-02", date)
+	midnight, err := ServiceMidnightParis(date)
 	if err != nil {
 		return nil, catalog.ErrTripNotFound
 	}
@@ -107,7 +107,7 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 		TripID:          tripID,
 		FeedVersionID:   row.FeedVersionID,
 		ShapeID:         row.ShapeID,
-		ServiceMidnight: time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location()),
+		ServiceMidnight: midnight,
 		Stops:           stops,
 		ShapeLengthM:    shapeLen,
 		LastSeen:        now,

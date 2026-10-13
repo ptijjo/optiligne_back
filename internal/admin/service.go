@@ -80,9 +80,10 @@ func (s *Service) PatchStop(ctx context.Context, operatorCode, depotCode, routeI
 	if err := s.store.UpdateStop(ctx, draft.FeedID, stopID, lat, lng); err != nil {
 		return nil, err
 	}
-	// 2. Fichier GTFS.
+	// 2. Fichier GTFS (dossier secteur rge/casas/… si IDs préfixés).
 	if s.files != nil {
-		if err := s.files.PatchStop(stopID, lat, lng); err != nil {
+		sector := gtfsSector(draft.RouteID, draft.TripID, draft.ShapeID, routeID, stopID)
+		if err := s.files.PatchStop(withGTFSSector(sector, stopID), lat, lng); err != nil {
 			return nil, wrapGTFS(err)
 		}
 	}
@@ -126,7 +127,9 @@ func (s *Service) PatchRouteType(ctx context.Context, operatorCode, depotCode, r
 	}
 	// 2. Fichier GTFS (upsert : crée la ligne dans routes.txt si absente).
 	if s.files != nil {
-		if err := s.files.UpsertRoute(routeID, "", draft.ShortName, draft.LongName, routeType); err != nil {
+		sector := gtfsSector(draft.RouteID, draft.TripID, draft.ShapeID, routeID)
+		fileRoute := withGTFSSector(sector, routeID)
+		if err := s.files.UpsertRoute(fileRoute, "", draft.ShortName, draft.LongName, routeType); err != nil {
 			return nil, wrapGTFS(err)
 		}
 	}
@@ -230,13 +233,26 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 	}
 	shapeIDs = uniqueNonEmpty(shapeIDs)
 
+	// Secteur fichier (rge / casas / casc / forbus / …) depuis les IDs du draft.
+	sectorIDs := []string{draft.RouteID, draft.TripID, draft.ShapeID, routeID}
+	for _, st := range stops {
+		sectorIDs = append(sectorIDs, st.StopID)
+	}
+	for _, id := range tripIDs {
+		sectorIDs = append(sectorIDs, id)
+	}
+	for _, id := range shapeIDs {
+		sectorIDs = append(sectorIDs, id)
+	}
+	sector := gtfsSector(sectorIDs...)
+
 	// 2. Upsert arrêts (nouveaux ol-* ou coords mises à jour).
 	for _, st := range stops {
 		if err := s.store.UpsertStop(ctx, feedID, st); err != nil {
 			return nil, err
 		}
 		if s.files != nil {
-			if err := s.files.UpsertStop(st.StopID, st.Name, st.Lat, st.Lng); err != nil {
+			if err := s.files.UpsertStop(withGTFSSector(sector, st.StopID), st.Name, st.Lat, st.Lng); err != nil {
 				return nil, wrapGTFS(err)
 			}
 		}
@@ -253,15 +269,16 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 		if err := s.store.ReplaceTripStopTimes(ctx, feedID, tripID, timed); err != nil {
 			return nil, err
 		}
+		fileTrip := withGTFSSector(sector, tripID)
 		for _, t := range timed {
 			fileRows = append(fileRows, StopTimeFileRow{
-				TripID: tripID, StopID: t.StopID, StopSequence: t.StopSequence,
+				TripID: fileTrip, StopID: withGTFSSector(sector, t.StopID), StopSequence: t.StopSequence,
 				ArrivalSec: t.ArrivalSec, DepartureSec: t.DepartureSec,
 			})
 		}
 	}
 	if s.files != nil && len(fileRows) > 0 {
-		if err := s.files.ReplaceStopTimes(tripIDs, fileRows); err != nil {
+		if err := s.files.ReplaceStopTimes(withGTFSSectorAll(sector, tripIDs), fileRows); err != nil {
 			return nil, wrapGTFS(err)
 		}
 	}
@@ -274,7 +291,7 @@ func (s *Service) Save(ctx context.Context, operatorCode, depotCode, routeID str
 		}
 	}
 	if s.files != nil && len(shapeIDs) > 0 {
-		if err := s.files.ReplaceShapes(shapeIDs, pts); err != nil {
+		if err := s.files.ReplaceShapes(withGTFSSectorAll(sector, shapeIDs), pts); err != nil {
 			return nil, wrapGTFS(err)
 		}
 	}
@@ -376,11 +393,23 @@ func (s *Service) CreateRoute(ctx context.Context, req dto.CreateRouteRequest) (
 		return nil, err
 	}
 	if s.files != nil {
-		if err := s.files.UpsertRoute(routeID, scope.AgencyID, shortName, longName, req.RouteType); err != nil {
+		sectorIDs := []string{scope.AgencyID, scope.ServiceID}
+		for _, st := range stops {
+			sectorIDs = append(sectorIDs, st.StopID)
+		}
+		sector := gtfsSector(sectorIDs...)
+		if sector == "" {
+			sector = sectorFromFiles(s.files)
+		}
+		fileRoute := withGTFSSector(sector, routeID)
+		fileShape := withGTFSSector(sector, shapeID)
+		fileService := withGTFSSector(sector, serviceID)
+		fileAgency := withGTFSSector(sector, scope.AgencyID)
+		if err := s.files.UpsertRoute(fileRoute, fileAgency, shortName, longName, req.RouteType); err != nil {
 			return nil, wrapGTFS(err)
 		}
 		if err := s.files.UpsertCalendar(CalendarFileRow{
-			ServiceID: serviceID,
+			ServiceID: fileService,
 			Monday: cal.Monday, Tuesday: cal.Tuesday, Wednesday: cal.Wednesday,
 			Thursday: cal.Thursday, Friday: cal.Friday, Saturday: cal.Saturday, Sunday: cal.Sunday,
 			StartDate: cal.StartDate, EndDate: cal.EndDate,
@@ -388,26 +417,28 @@ func (s *Service) CreateRoute(ctx context.Context, req dto.CreateRouteRequest) (
 			return nil, wrapGTFS(err)
 		}
 		for _, st := range stops {
-			if err := s.files.UpsertStop(st.StopID, st.Name, st.Lat, st.Lng); err != nil {
+			if err := s.files.UpsertStop(withGTFSSector(sector, st.StopID), st.Name, st.Lat, st.Lng); err != nil {
 				return nil, wrapGTFS(err)
 			}
 		}
-		if err := s.files.ReplaceShapes([]string{shapeID}, pts); err != nil {
+		if err := s.files.ReplaceShapes([]string{fileShape}, pts); err != nil {
 			return nil, wrapGTFS(err)
 		}
 		var rows []StopTimeFileRow
-		for _, tr := range tripInputs {
-			if err := s.files.UpsertTrip(tr.TripID, routeID, serviceID, shapeID, tr.Headsign); err != nil {
+		fileTripIDs := withGTFSSectorAll(sector, tripIDs)
+		for i, tr := range tripInputs {
+			fileTrip := fileTripIDs[i]
+			if err := s.files.UpsertTrip(fileTrip, fileRoute, fileService, fileShape, tr.Headsign); err != nil {
 				return nil, wrapGTFS(err)
 			}
 			for _, t := range tr.Timed {
 				rows = append(rows, StopTimeFileRow{
-					TripID: tr.TripID, StopID: t.StopID, StopSequence: t.StopSequence,
+					TripID: fileTrip, StopID: withGTFSSector(sector, t.StopID), StopSequence: t.StopSequence,
 					ArrivalSec: t.ArrivalSec, DepartureSec: t.DepartureSec,
 				})
 			}
 		}
-		if err := s.files.ReplaceStopTimes(tripIDs, rows); err != nil {
+		if err := s.files.ReplaceStopTimes(fileTripIDs, rows); err != nil {
 			return nil, wrapGTFS(err)
 		}
 	}
