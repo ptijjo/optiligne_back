@@ -67,25 +67,21 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 		return nil, catalog.ErrTripNotFound
 	}
 
+	// Même jointure périmètre que catalog.TripStops (pas d'EXISTS — scan bool fragile + tz).
 	var row struct {
 		FeedVersionID string
 		ShapeID       string
 		RouteType     int
-		InScope       bool
 	}
 	err = s.db.WithContext(ctx).Raw(`
-		SELECT t.feed_version_id, t.shape_id, r.route_type,
-		  EXISTS (
-		    SELECT 1 FROM route_assignments a
-		    JOIN operators o ON o.id = a.operator_id
-		    JOIN depots d ON d.id = a.depot_id
-		    WHERE a.feed_version_id = t.feed_version_id AND a.route_id = t.route_id
-		      AND o.code = ? AND d.code IN ?
-		  ) AS in_scope
+		SELECT t.feed_version_id, t.shape_id, r.route_type
 		FROM trips t
 		JOIN routes r ON r.route_id = t.route_id AND r.feed_version_id = t.feed_version_id
+		JOIN route_assignments a ON a.route_id = t.route_id AND a.feed_version_id = t.feed_version_id
+		JOIN operators o ON o.id = a.operator_id
+		JOIN depots d ON d.id = a.depot_id
 		JOIN feed_versions fv ON fv.id = t.feed_version_id AND fv.active = true
-		WHERE t.trip_id = ?
+		WHERE o.code = ? AND d.code IN ? AND t.trip_id = ?
 	`, operatorCode, depots, tripID).Scan(&row).Error
 	if err != nil {
 		return nil, err
@@ -93,7 +89,7 @@ func (s *Service) Start(ctx context.Context, operatorCode, depotCode, tripID, da
 	if row.FeedVersionID == "" {
 		return nil, catalog.ErrTripNotFound
 	}
-	if err := catalog.EnsureSchoolTrip(row.RouteType, row.InScope); err != nil {
+	if err := catalog.EnsureSchoolTrip(row.RouteType, true); err != nil {
 		return nil, err
 	}
 
